@@ -1,0 +1,25 @@
+{
+	"name": "grove",
+	"version": "0.1.0",
+	"description": "Windows-native multi-agent orchestrator for Claude Code",
+	"module": "src/index.ts",
+	"type": "module",
+	"bin": {
+		"grove": "src/index.ts"
+	},
+	"scripts": {
+		"dev": "bun run src/index.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"private": true,
+	"dependencies": {
+		"commander": "^13.1.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	}
+}
