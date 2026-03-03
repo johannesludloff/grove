@@ -16,25 +16,80 @@ Orchestrator (your Claude Code session)
 
 Hooks enforce this: a `PreToolUse` guard blocks the orchestrator from using Write/Edit tools on project files, forcing delegation.
 
-## Quick Start
+## Prerequisites
+
+- **[Bun](https://bun.sh) ≥ 1.0** — runtime and package manager (replaces Node/npm)
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` CLI)** — must be on your `PATH`; agents are spawned via `claude -p`
+- **Git** — repositories must be initialized; grove uses git worktrees for agent isolation
+- **An Anthropic API key** — configured for Claude Code (see `claude auth` or `ANTHROPIC_API_KEY`)
+
+> **Windows note:** Grove is designed and tested on Windows (MINGW64/Git Bash). It runs on macOS/Linux too, but Windows is the primary target.
+
+## Installation
+
+**1. Clone the grove repository**
 
 ```bash
-# Install globally
-bun link
-
-# Initialize in any project
-cd your-project
-grove init
-
-# Start a new Claude Code session — grove hooks activate automatically
+git clone https://github.com/your-org/grove.git
+cd grove
 ```
 
-The orchestrator sees every user request and dispatches it:
+**2. Install dependencies**
+
+```bash
+bun install
+```
+
+**3. Link the `grove` command globally**
+
+```bash
+bun link
+```
+
+This registers `grove` as a global command. Verify:
+
+```bash
+grove --version
+```
+
+## Project Setup
+
+Run `grove init` once inside any git repository you want to orchestrate:
+
+```bash
+cd your-project
+grove init
+```
+
+`grove init` does three things:
+1. Creates `.grove/` — the runtime directory (SQLite DB, worktrees, logs)
+2. Installs Claude Code hooks into `.claude/settings.local.json` — enables automatic mail delivery and the orchestrator guard
+3. Writes (or updates) `CLAUDE.md` — injects orchestrator instructions so Claude Code knows to delegate all work
+
+**Verify hooks are installed:**
+
+```bash
+grove hooks status
+# Hooks installed.
+```
+
+## Quick Start
+
+Open a new Claude Code session in the initialized project. Grove hooks activate automatically — the `SessionStart` hook primes Claude with orchestrator context, and `UserPromptSubmit` injects unread agent mail before each turn.
+
+Give Claude a task:
 
 ```bash
 grove task add auth "Add JWT authentication" --description "Login endpoint, middleware, tests"
 grove spawn auth -n auth-lead -c lead
 # Lead autonomously scouts, spawns builders, verifies, and reports back
+```
+
+When the lead reports back (injected automatically into your next prompt), merge its work:
+
+```bash
+grove merge --all
+grove clean
 ```
 
 ## Agent Capabilities
