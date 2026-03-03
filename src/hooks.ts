@@ -64,6 +64,16 @@ export function buildHooksJson(): HooksConfig {
 				],
 			},
 		],
+		Stop: [
+			{
+				hooks: [
+					{
+						type: "command",
+						command: "grove mail deliver",
+					},
+				],
+			},
+		],
 	};
 }
 

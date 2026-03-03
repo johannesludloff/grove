@@ -327,6 +327,42 @@ mailCmd
 	});
 
 mailCmd
+	.command("deliver")
+	.description("Stop hook: deliver pending orchestrator mail without user prompt")
+	.action(async () => {
+		// Read stdin JSON from the Stop hook
+		const input = await new Response(Bun.stdin.stream()).text();
+		let data: { stop_hook_active?: boolean } = {};
+		try {
+			data = JSON.parse(input) as { stop_hook_active?: boolean };
+		} catch {
+			// Malformed input — exit silently
+			process.exit(0);
+		}
+
+		// Anti-loop guard: if we're already continuing due to a stop hook, don't re-trigger
+		if (data.stop_hook_active) {
+			process.exit(0);
+		}
+
+		const messages = checkMail("orchestrator");
+		if (messages.length === 0) {
+			process.exit(0);
+		}
+
+		// Format messages and mark each as read
+		const lines: string[] = [`${messages.length} unread message(s) for orchestrator:\n`];
+		for (const m of messages) {
+			lines.push(`  #${m.id} [${m.type}] from ${m.from}: ${m.subject}`);
+			lines.push(`    ${m.body}`);
+			markRead(m.id);
+		}
+
+		const reason = lines.join("\n");
+		process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
+	});
+
+mailCmd
 	.command("list")
 	.option("--from <name>", "Filter by sender")
 	.option("--to <name>", "Filter by recipient")
