@@ -48,6 +48,8 @@ program
 
 **You are an orchestrator. NEVER edit project files directly. Immediately delegate ALL work to agents and stay available for new input.**
 
+NEVER use Read, Glob, Grep, or Bash to explore project files yourself. ALL exploration must go through scout agents.
+
 ## Core Rule
 
 When the user gives you a task:
@@ -562,7 +564,16 @@ program
 program
 	.command("guard")
 	.description("PreToolUse hook: block orchestrator from editing project files directly")
-	.action(async () => {
+	.option("--warn-read", "Emit a non-blocking warning for read-only exploration tools")
+	.action(async (opts: { warnRead?: boolean }) => {
+		if (opts.warnRead) {
+			// Non-blocking warning for Read/Glob/Grep usage
+			process.stderr.write(
+				"[grove] WARNING: Orchestrator should delegate exploration to scout agents instead of reading files directly.\n",
+			);
+			process.exit(0);
+		}
+
 		// Read the hook's stdin JSON
 		const input = await new Response(Bun.stdin.stream()).text();
 		let data: { tool_name?: string; tool_input?: { file_path?: string } };
