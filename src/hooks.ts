@@ -63,6 +63,15 @@ export function buildHooksJson(): HooksConfig {
 					},
 				],
 			},
+			{
+				matcher: "Read|Glob|Grep",
+				hooks: [
+					{
+						type: "command",
+						command: "grove guard --warn-read",
+					},
+				],
+			},
 		],
 	};
 }
