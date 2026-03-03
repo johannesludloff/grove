@@ -452,10 +452,12 @@ export function startDashboard(intervalMs: number): void {
 	const cleanup = () => {
 		running = false;
 		clearInterval(timer);
+		process.stdout.off("resize", tick);
 		process.stdout.write(CURSOR.show + CURSOR.altScreenOff);
 		process.exit(0);
 	};
 
 	process.on("SIGINT", cleanup);
 	process.on("SIGTERM", cleanup);
+	process.stdout.on("resize", tick);
 }
