@@ -263,9 +263,47 @@ program
 			return;
 		}
 		console.log("Agents:");
+
+		const childrenMap = new Map<string, typeof agents>();
+		const roots: typeof agents = [];
+
 		for (const a of agents) {
+			if (a.parentName) {
+				const siblings = childrenMap.get(a.parentName) ?? [];
+				siblings.push(a);
+				childrenMap.set(a.parentName, siblings);
+			}
+		}
+
+		// agents are already sorted DESC by created_at; roots keep that order
+		const rootNames = new Set<string>();
+		for (const a of agents) {
+			if (!a.parentName) {
+				roots.push(a);
+				rootNames.add(a.name);
+			}
+		}
+
+		// Orphaned children (parent not in agents list) treated as roots
+		for (const a of agents) {
+			if (a.parentName && !rootNames.has(a.parentName) && !childrenMap.has(a.name)) {
+				roots.push(a);
+			}
+		}
+
+		const fmt = (a: (typeof agents)[0], prefix: string) => {
 			const pid = a.pid ? ` (PID ${a.pid})` : "";
-			console.log(`  [${a.status}] ${a.name} — ${a.capability} on ${a.branch}${pid}`);
+			console.log(`${prefix}[${a.status}] ${a.name} — ${a.capability} on ${a.branch}${pid}`);
+		};
+
+		for (const root of roots) {
+			fmt(root, "  ");
+			const children = (childrenMap.get(root.name) ?? []).slice().sort(
+				(x, y) => new Date(x.createdAt).getTime() - new Date(y.createdAt).getTime(),
+			);
+			for (const child of children) {
+				fmt(child, "    └─ ");
+			}
 		}
 	});
 
