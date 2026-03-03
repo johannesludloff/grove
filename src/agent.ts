@@ -1,5 +1,6 @@
 /** Agent spawning and lifecycle management */
 
+import { existsSync } from "node:fs";
 import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail } from "./mail.ts";
@@ -7,6 +8,16 @@ import { queryMemories, renderMemories, markUsed } from "./memory.ts";
 import { updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
+
+/** Common English stopwords for keyword extraction */
+const STOPWORDS = new Set([
+	"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+	"of", "with", "by", "from", "is", "it", "as", "be", "was", "are",
+	"been", "this", "that", "these", "those", "will", "can", "has", "have",
+	"had", "not", "all", "any", "its", "you", "your", "should", "must",
+	"into", "also", "than", "then", "when", "what", "which", "who", "how",
+	"each", "make", "like", "use", "just", "only", "new", "one", "two",
+]);
 
 /** System prompts per capability */
 const SYSTEM_PROMPTS: Record<AgentCapability, string> = {
@@ -108,15 +119,30 @@ export async function spawnAgent(opts: {
 		opts.parentName ?? null,
 	);
 
-	// Query and inject relevant memories
-	const memories = queryMemories();
+	// Query and inject relevant memories (task-aware filtering)
+	const memories = queryTaskRelevantMemories(opts.taskDescription);
 	const memoryBlock = renderMemories(memories);
 	if (memories.length > 0) {
 		markUsed(memories.map((m) => m.id));
 	}
 
+	// Build sibling context
+	const siblingBlock = opts.parentName
+		? buildSiblingBlock(opts.parentName, opts.name)
+		: "";
+
+	// Build prior work context
+	const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
+
 	// Build the prompt
-	const prompt = buildPrompt(opts.capability, opts.taskDescription, opts.name, memoryBlock);
+	const prompt = buildPrompt(
+		opts.capability,
+		opts.taskDescription,
+		opts.name,
+		memoryBlock,
+		siblingBlock,
+		priorWorkBlock,
+	);
 
 	// Write prompt to a file and pipe via stdin (avoids Windows arg length limits)
 	const logDir = `${process.cwd()}/.grove/logs/${opts.name}`;
@@ -174,13 +200,16 @@ export async function spawnAgent(opts: {
 			agent: opts.name,
 		});
 
+		// Build rich completion mail body
+		const mailBody = await buildCompletionMailBody(exitCode, worktreePath, logDir);
+
 		// Notify parent (or orchestrator if no parent)
 		const recipient = opts.parentName ?? "orchestrator";
 		sendMail({
 			from: opts.name,
 			to: recipient,
 			subject: `Agent ${opts.name} ${status}`,
-			body: `Exit code: ${exitCode}`,
+			body: mailBody,
 			type: status === "completed" ? "done" : "error",
 		});
 
@@ -213,16 +242,20 @@ function buildPrompt(
 	taskDescription: string,
 	agentName: string,
 	memoryBlock: string,
+	siblingBlock: string,
+	priorWorkBlock: string,
 ): string {
 	const systemPart = SYSTEM_PROMPTS[capability];
 	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
+	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
+	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
 
 	return `${systemPart}
 
 ## Your Identity
 - Agent name: ${agentName}
 - Role: ${capability}
-${memorySection}
+${memorySection}${siblingSection}${priorWorkSection}
 ## Your Task
 ${taskDescription}
 
@@ -250,6 +283,164 @@ grove memory add auth failure "JWT tokens must be refreshed before API calls or 
 \`\`\`
 
 Only record things that would genuinely help a future agent. Keep each entry to one sentence.`;
+}
+
+/** Extract keywords from task description for memory filtering */
+function extractKeywords(text: string): string[] {
+	const words = text
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, " ")
+		.split(/\s+/)
+		.filter((w) => w.length > 3 && !STOPWORDS.has(w));
+	return [...new Set(words)];
+}
+
+/** Query memories filtered by task-relevant domains, with global fallback */
+function queryTaskRelevantMemories(taskDescription: string): ReturnType<typeof queryMemories> {
+	const keywords = extractKeywords(taskDescription);
+
+	if (keywords.length === 0) {
+		return queryMemories();
+	}
+
+	// Query per-keyword domain and deduplicate
+	const seen = new Set<number>();
+	const relevant: ReturnType<typeof queryMemories> = [];
+
+	for (const keyword of keywords) {
+		const matches = queryMemories({ domain: keyword });
+		for (const m of matches) {
+			if (!seen.has(m.id)) {
+				seen.add(m.id);
+				relevant.push(m);
+			}
+		}
+	}
+
+	// Fall back to global if no domain matches
+	if (relevant.length === 0) {
+		return queryMemories();
+	}
+
+	// Cap at 20 (MAX_INJECT equivalent), sort by useCount desc
+	return relevant
+		.sort((a, b) => b.useCount - a.useCount)
+		.slice(0, 20);
+}
+
+/** Build a context block listing sibling agents (same parent) */
+function buildSiblingBlock(parentName: string, selfName: string): string {
+	const db = getDb();
+	const siblings = db
+		.prepare(
+			`SELECT name, capability, task_id, branch, status
+			 FROM agents WHERE parent_name = ? AND name != ?`,
+		)
+		.all(parentName, selfName) as Array<{
+		name: string;
+		capability: string;
+		task_id: string;
+		branch: string;
+		status: string;
+	}>;
+
+	if (siblings.length === 0) return "";
+
+	const lines = ["## Sibling Agents", ""];
+	lines.push("Other agents working under the same lead:");
+	lines.push("");
+	lines.push("| Name | Role | Task | Branch | Status |");
+	lines.push("|------|------|------|--------|--------|");
+	for (const s of siblings) {
+		lines.push(`| ${s.name} | ${s.capability} | ${s.task_id} | ${s.branch} | ${s.status} |`);
+	}
+	lines.push("");
+	lines.push("Coordinate to avoid conflicts — don't modify files another sibling is working on.");
+
+	return lines.join("\n");
+}
+
+/** Build a context block with prior completed agent work on the same task */
+function buildPriorWorkBlock(taskId: string, selfName: string): string {
+	const db = getDb();
+
+	// Find completion mails from agents that worked on the same task
+	const priorWork = db
+		.prepare(
+			`SELECT m.body, m.from_agent, a.capability
+			 FROM mail m JOIN agents a ON m.from_agent = a.name
+			 WHERE a.task_id = ? AND a.status = 'completed' AND a.name != ? AND m.type = 'done'
+			 ORDER BY m.created_at DESC LIMIT 3`,
+		)
+		.all(taskId, selfName) as Array<{
+		body: string;
+		from_agent: string;
+		capability: string;
+	}>;
+
+	if (priorWork.length === 0) return "";
+
+	const lines = ["## Prior Work on This Task", ""];
+	const maxLinesPerEntry = 80;
+
+	for (const pw of priorWork) {
+		lines.push(`### ${pw.from_agent} (${pw.capability})`);
+		const bodyLines = pw.body.split("\n");
+		if (bodyLines.length > maxLinesPerEntry) {
+			lines.push(...bodyLines.slice(0, maxLinesPerEntry));
+			lines.push(`... (${bodyLines.length - maxLinesPerEntry} more lines truncated)`);
+		} else {
+			lines.push(pw.body);
+		}
+		lines.push("");
+	}
+
+	return lines.join("\n");
+}
+
+/** Build a rich completion mail body with file list and output tail */
+async function buildCompletionMailBody(
+	exitCode: number,
+	worktreePath: string,
+	logDir: string,
+): Promise<string> {
+	const parts: string[] = [`Exit code: ${exitCode}`];
+
+	// Get files changed on the branch
+	try {
+		const diffProc = Bun.spawn(["git", "diff", "--name-only", "HEAD~1"], {
+			cwd: worktreePath,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const diffExit = await diffProc.exited;
+		if (diffExit === 0) {
+			const fileList = await new Response(diffProc.stdout).text();
+			const trimmed = fileList.trim();
+			if (trimmed) {
+				parts.push(`\nFiles changed:\n${trimmed}`);
+			}
+		}
+	} catch {
+		// Worktree may already be gone or no commits made
+	}
+
+	// Read last 50 lines of stdout
+	const stdoutPath = `${logDir}/stdout.txt`;
+	try {
+		if (existsSync(stdoutPath)) {
+			const content = await Bun.file(stdoutPath).text();
+			const lines = content.split("\n");
+			const tail = lines.slice(-50).join("\n").trim();
+			if (tail) {
+				parts.push(`\nOutput (last 50 lines):\n${tail}`);
+			}
+		}
+	} catch {
+		// Log file may not exist or be unreadable
+	}
+
+	return parts.join("\n");
 }
 
 /** Get an agent by name */
