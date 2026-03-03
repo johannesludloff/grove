@@ -395,13 +395,6 @@ function renderDashboard(): void {
 	const events = recentEvents(30);
 
 	let output = CURSOR.clear;
-
-	// Rows 1-2: header
-	const title = "GROVE DASHBOARD";
-	const titlePadded = " ".repeat(Math.max(0, Math.floor((width - title.length) / 2))) + c.brandBold(title);
-	output += writeLine(1, 1, titlePadded, width);
-	output += writeLine(2, 1, ` ${separator(width - 2)}`, width);
-
 	let row = 3;
 
 	// Agents
@@ -446,48 +439,25 @@ export function startDashboard(intervalMs: number): void {
 	process.stdout.write(CURSOR.altScreenOn + CURSOR.hide);
 
 	let running = true;
-	let rendering = false;
-	let resizeTimeout: ReturnType<typeof setTimeout> | undefined;
-	let timer: ReturnType<typeof setInterval>;
 
 	const tick = () => {
 		if (!running) return;
-		if (rendering) return;
-		rendering = true;
-		try {
-			renderDashboard();
-		} finally {
-			rendering = false;
-		}
-	};
-
-	const restartTimer = () => {
-		clearInterval(timer);
-		timer = setInterval(tick, intervalMs);
-	};
-
-	const onResize = () => {
-		if (resizeTimeout !== undefined) clearTimeout(resizeTimeout);
-		resizeTimeout = setTimeout(() => {
-			resizeTimeout = undefined;
-			restartTimer();
-			tick();
-		}, 50);
+		renderDashboard();
 	};
 
 	tick();
-	timer = setInterval(tick, intervalMs);
+
+	const timer = setInterval(tick, intervalMs);
 
 	const cleanup = () => {
 		running = false;
 		clearInterval(timer);
-		if (resizeTimeout !== undefined) clearTimeout(resizeTimeout);
-		process.stdout.off("resize", onResize);
+		process.stdout.off("resize", tick);
 		process.stdout.write(CURSOR.show + CURSOR.altScreenOff);
 		process.exit(0);
 	};
 
 	process.on("SIGINT", cleanup);
 	process.on("SIGTERM", cleanup);
-	process.stdout.on("resize", onResize);
+	process.stdout.on("resize", tick);
 }
