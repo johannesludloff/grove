@@ -63,6 +63,15 @@ export async function removeWorktree(agentName: string): Promise<void> {
 		const stderr = await new Response(proc.stderr).text();
 		throw new Error(`Failed to remove worktree: ${stderr.trim()}`);
 	}
+
+	// Delete the branch ref so grove/* branches don't accumulate
+	const branch = `grove/${agentName}`;
+	const branchProc = Bun.spawn(["git", "branch", "-D", branch], {
+		cwd: process.cwd(),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	await branchProc.exited;
 }
 
 /** List all grove worktrees */
