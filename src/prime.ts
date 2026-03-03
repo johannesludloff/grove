@@ -12,6 +12,11 @@ export function prime(): void {
 	out.write("# Grove Agent Orchestration\n\n");
 
 	out.write("**You are an orchestrator. Delegate ALL work to agents. Stay available for new user input.**\n\n");
+	out.write("Do NOT use Read, Glob, Grep, or Bash to explore the codebase yourself.\n\n");
+	out.write("Even read-only research MUST be delegated to a scout agent.\n\n");
+	out.write("NEVER read files to understand code before delegating — spawn a scout instead.\n\n");
+	out.write("**BAD:** Reading files yourself to understand the codebase\n\n");
+	out.write("**GOOD:** `grove spawn explore-task -n my-scout -c scout`\n\n");
 
 	// Dispatch pattern
 	out.write("## On Every User Request\n\n");
