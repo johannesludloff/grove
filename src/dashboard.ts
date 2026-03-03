@@ -10,6 +10,7 @@
  *   Mail (left 50%)    Memory (right 50%)
  */
 
+import { execSync } from "child_process";
 import { listAgents } from "./agent.ts";
 import { recentEvents, type EventType, type GroveEvent } from "./events.ts";
 import { listMail } from "./mail.ts";
@@ -17,6 +18,52 @@ import { listMemories } from "./memory.ts";
 import { listTasks } from "./tasks.ts";
 import type { Agent, AgentStatus, Mail, Task } from "./types.ts";
 import type { Memory } from "./memory.ts";
+
+// ── Terminal size detection ──────────────────────────────────────────────
+
+let cachedSize: { width: number; height: number } | undefined;
+let cachedAt = 0;
+
+function getTerminalSize(): { width: number; height: number } {
+	// Try stdout TTY dimensions first
+	if (process.stdout.columns && process.stdout.rows) {
+		return { width: process.stdout.columns, height: process.stdout.rows };
+	}
+
+	// Try stderr (sometimes TTY when stdout isn't)
+	if (process.stderr.columns && process.stderr.rows) {
+		return { width: process.stderr.columns, height: process.stderr.rows };
+	}
+
+	// On Windows, try `mode con` for accurate column count (cached for 2s)
+	if (process.platform === "win32") {
+		const now = Date.now();
+		if (cachedSize && now - cachedAt <= 2000) {
+			return cachedSize;
+		}
+		try {
+			const output = execSync("mode con", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+			const colMatch = /(?:Columns|Spalten)[:\s]+(\d+)/i.exec(output);
+			const width = colMatch ? parseInt(colMatch[1]!, 10) : 100;
+			const height = process.stdout.rows ?? process.stderr.rows ?? 30;
+			cachedSize = { width, height };
+			cachedAt = now;
+			return cachedSize;
+		} catch {
+			// fall through to env vars / defaults
+		}
+	}
+
+	// Try environment variables
+	const envCols = process.env.COLUMNS ? parseInt(process.env.COLUMNS, 10) : NaN;
+	const envLines = process.env.LINES ? parseInt(process.env.LINES, 10) : NaN;
+	if (!isNaN(envCols) && !isNaN(envLines)) {
+		return { width: envCols, height: envLines };
+	}
+
+	// Final fallback
+	return { width: 100, height: 30 };
+}
 
 // ── Terminal control ────────────────────────────────────────────────────
 
@@ -385,8 +432,7 @@ function renderMemory(memories: Memory[], width: number, maxRows: number, startR
 // ── Main render ─────────────────────────────────────────────────────────
 
 function renderDashboard(): void {
-	const width = process.stdout.columns ?? 100;
-	const height = process.stdout.rows ?? 30;
+	const { width, height } = getTerminalSize();
 
 	const agents = listAgents();
 	const tasks = listTasks();
@@ -483,6 +529,7 @@ export function startDashboard(intervalMs: number): void {
 		clearInterval(timer);
 		if (resizeTimeout !== undefined) clearTimeout(resizeTimeout);
 		process.stdout.off("resize", onResize);
+		process.off("SIGWINCH", onResize);
 		process.stdout.write(CURSOR.show + CURSOR.altScreenOff);
 		process.exit(0);
 	};
@@ -490,4 +537,5 @@ export function startDashboard(intervalMs: number): void {
 	process.on("SIGINT", cleanup);
 	process.on("SIGTERM", cleanup);
 	process.stdout.on("resize", onResize);
+	process.on("SIGWINCH", onResize);
 }
