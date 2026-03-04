@@ -143,6 +143,7 @@ const STATUS_THEME: Record<AgentStatus, { icon: string; color: (s: string) => st
 	failed: { icon: "●", color: c.red },
 	completed: { icon: "●", color: c.cyan },
 	stopped: { icon: "●", color: c.gray },
+	cleaned: { icon: "○", color: c.gray },
 };
 
 function taskStatusDot(status: string): string {
