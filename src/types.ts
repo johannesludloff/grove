@@ -19,6 +19,7 @@ export interface Agent {
 	parentName: string | null;
 	createdAt: string;
 	updatedAt: string;
+	lastActivityAt: string | null;
 }
 
 /** Message between agents */
