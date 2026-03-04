@@ -589,4 +589,7 @@ export async function cleanAgent(name: string): Promise<void> {
 	}
 
 	await removeWorktree(name);
+
+	const db = getDb();
+	db.prepare("UPDATE agents SET status = 'cleaned', updated_at = datetime('now') WHERE name = ?").run(name);
 }
