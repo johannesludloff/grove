@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
-import { sendMail } from "./mail.ts";
+import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
 import { updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
@@ -613,6 +613,20 @@ export async function cleanAgent(name: string): Promise<void> {
 	if (!agent) throw new Error(`Agent "${name}" not found`);
 	if (agent.status === "running" || agent.status === "spawning") {
 		throw new Error(`Agent "${name}" is still active. Stop it first.`);
+	}
+
+	// Forward any unread mail addressed to this agent to the orchestrator
+	// so the orchestrator can pick up orphaned work or completion reports
+	const unread = checkMail(name);
+	for (const msg of unread) {
+		sendMail({
+			from: msg.from,
+			to: "orchestrator",
+			subject: msg.subject,
+			body: `[forwarded from dead lead: ${name}]\n\n${msg.body}`,
+			type: msg.type,
+		});
+		markRead(msg.id);
 	}
 
 	await removeWorktree(name);
