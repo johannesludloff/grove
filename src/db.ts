@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -6,7 +7,13 @@ let _db: Database | null = null;
 
 /** Get the .grove directory path for the current project */
 export function groveDir(): string {
-	return path.join(process.cwd(), ".grove");
+	try {
+		const gitCommonDir = execSync("git rev-parse --git-common-dir", { encoding: "utf8" }).trim();
+		const repoRoot = path.dirname(path.resolve(gitCommonDir));
+		return path.join(repoRoot, ".grove");
+	} catch {
+		return path.join(process.cwd(), ".grove");
+	}
 }
 
 /** Get or create the SQLite database */
