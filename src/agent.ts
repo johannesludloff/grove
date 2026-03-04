@@ -566,6 +566,18 @@ export async function stopAgent(name: string): Promise<void> {
 	db.prepare("UPDATE agents SET status = 'stopped', updated_at = datetime('now') WHERE name = ?").run(name);
 
 	emit("agent.stopped", `Agent "${name}" was stopped`, { agent: name });
+
+	// Cascade stop: stop all running children of this agent
+	const children = db
+		.prepare("SELECT name FROM agents WHERE parent_name = ? AND status IN ('running', 'spawning')")
+		.all(name) as { name: string }[];
+	for (const child of children) {
+		try {
+			await stopAgent(child.name);
+		} catch {
+			// Child may have already exited
+		}
+	}
 }
 
 /** Clean up a stopped/completed agent's worktree */

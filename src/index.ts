@@ -630,6 +630,28 @@ program
 					}
 				}
 			}
+
+			// Stop and clean orphaned agents whose parent has failed or stopped
+			const deadParents = new Set(
+				agents.filter((a) => a.status === "failed" || a.status === "stopped").map((a) => a.name),
+			);
+			const orphans = agents.filter(
+				(a) =>
+					(a.status === "running" || a.status === "spawning") &&
+					a.parentName != null &&
+					deadParents.has(a.parentName),
+			);
+			for (const orphan of orphans) {
+				console.log(`Stopping orphaned agent ${orphan.name} (parent ${orphan.parentName} is ${agents.find((a) => a.name === orphan.parentName)?.status})`);
+				try {
+					await stopAgent(orphan.name);
+					await cleanAgent(orphan.name);
+					cleaned++;
+				} catch {
+					// Skip if already gone
+				}
+			}
+
 			console.log(`Cleaned ${cleaned} agent worktree(s).`);
 		}
 	});
