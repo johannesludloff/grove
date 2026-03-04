@@ -259,6 +259,20 @@ export async function spawnAgent(opts: {
 			agent: opts.name,
 		});
 
+		// Cascade stop: if a lead agent fails, stop all running sub-agents
+		if (status === "failed" && opts.capability === "lead") {
+			const children = liveDb
+				.prepare("SELECT name FROM agents WHERE parent_name = ? AND status IN ('running', 'spawning')")
+				.all(opts.name) as { name: string }[];
+			for (const child of children) {
+				try {
+					await stopAgent(child.name);
+				} catch {
+					// Child may have already exited
+				}
+			}
+		}
+
 		// Build rich completion mail body
 		const mailBody = await buildCompletionMailBody(exitCode, worktreePath, logDir);
 

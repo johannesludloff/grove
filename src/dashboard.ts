@@ -211,7 +211,7 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 
 	// Column headers
 	output += writeLine(startRow + 1, 1,
-		`${indent}${c.dim(pad("", 3))}${c.dim(pad("Name", 16))} ${c.dim(pad("Cap", 12))} ${c.dim(pad("State", 10))} ${c.dim(pad("Task", 14))} ${c.dim("Time")}`,
+		`${indent}${c.dim(pad("", 3))}${c.dim(pad("Name", 22))} ${c.dim(pad("Cap", 10))} ${c.dim(pad("State", 12))} ${c.dim(pad("Task", 18))} ${c.dim("Time")}`,
 		width,
 	);
 
@@ -254,11 +254,11 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		const { agent: a, isChild } = visible[i]!;
 		const theme = STATUS_THEME[a.status];
 		const icon = theme.color(theme.icon);
-		const rawName = isChild ? `  └─ ${truncate(a.name, 12)}` : truncate(a.name, 16);
-		const name = c.cyan(pad(rawName, 16));
-		const cap = pad(a.capability, 12);
-		const state = theme.color(pad(a.status, 10));
-		const taskId = c.cyan(pad(truncate(a.taskId, 14), 14));
+		const rawName = isChild ? ` └─ ${truncate(a.name, 18)}` : truncate(a.name, 22);
+		const name = c.cyan(pad(rawName, 22));
+		const cap = pad(a.capability, 10);
+		const state = theme.color(pad(a.status, 12));
+		const taskId = c.cyan(pad(truncate(a.taskId, 18), 18));
 		const endTime =
 			a.status === "completed" || a.status === "failed" || a.status === "stopped"
 				? new Date(a.updatedAt + "Z").getTime()
