@@ -4,7 +4,7 @@
 export type AgentCapability = "builder" | "scout" | "reviewer" | "lead";
 
 /** Agent lifecycle state */
-export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped";
+export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped" | "cleaned";
 
 /** Registered agent in the database */
 export interface Agent {
