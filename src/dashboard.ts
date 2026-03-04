@@ -215,23 +215,47 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		width,
 	);
 
-	const sorted = [...agents].sort((a, b) => {
-		const activeStates = ["running", "spawning"];
-		const aActive = activeStates.includes(a.status);
-		const bActive = activeStates.includes(b.status);
-		if (aActive && !bActive) return -1;
-		if (!aActive && bActive) return 1;
-		return 0;
-	});
+	const activeStates = ["running", "spawning"];
+	const sortScore = (a: Agent) => (activeStates.includes(a.status) ? 0 : 1);
 
-	const visible = sorted.slice(0, maxRows);
+	// Build hierarchy
+	const agentNames = new Set(agents.map((a) => a.name));
+	const childrenMap = new Map<string, Agent[]>();
+	const roots: Agent[] = [];
+
+	for (const a of agents) {
+		if (a.parentName && agentNames.has(a.parentName)) {
+			const siblings = childrenMap.get(a.parentName) ?? [];
+			siblings.push(a);
+			childrenMap.set(a.parentName, siblings);
+		} else {
+			roots.push(a);
+		}
+	}
+
+	roots.sort((a, b) => sortScore(a) - sortScore(b));
+	for (const children of childrenMap.values()) {
+		children.sort((a, b) => sortScore(a) - sortScore(b));
+	}
+
+	// Flatten into ordered rows: root, then its children, then next root, etc.
+	const ordered: Array<{ agent: Agent; isChild: boolean }> = [];
+	for (const root of roots) {
+		ordered.push({ agent: root, isChild: false });
+		for (const child of childrenMap.get(root.name) ?? []) {
+			ordered.push({ agent: child, isChild: true });
+		}
+	}
+
+	const visible = ordered.slice(0, maxRows);
 	const now = Date.now();
 
 	for (let i = 0; i < visible.length; i++) {
-		const a = visible[i]!;
+		const { agent: a, isChild } = visible[i]!;
 		const theme = STATUS_THEME[a.status];
 		const icon = theme.color(theme.icon);
-		const name = c.cyan(pad(truncate(a.name, 16), 16));
+		const rawName = isChild ? `  └─ ${truncate(a.name, 12)}` : truncate(a.name, 16);
+		const name = c.cyan(pad(rawName, 16));
 		const cap = pad(a.capability, 12);
 		const state = theme.color(pad(a.status, 10));
 		const taskId = c.cyan(pad(truncate(a.taskId, 14), 14));
