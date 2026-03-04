@@ -257,15 +257,24 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		const rawName = isChild ? ` └─ ${truncate(a.name, 18)}` : truncate(a.name, 22);
 		const name = c.cyan(pad(rawName, 22));
 		const cap = pad(a.capability, 10);
-		const state = theme.color(pad(a.status, 12));
-		const taskId = c.cyan(pad(truncate(a.taskId, 18), 18));
 		const endTime =
 			a.status === "completed" || a.status === "failed" || a.status === "stopped"
 				? new Date(a.updatedAt + "Z").getTime()
 				: now;
 		const elapsed = endTime - new Date(a.createdAt + "Z").getTime();
 		const dur = formatDuration(elapsed);
-		output += writeLine(startRow + 2 + i, 1, `${indent}${icon}  ${name} ${cap} ${state} ${taskId} ${dur}`, width);
+
+		// Stall detection: warn if running/spawning agent had no activity for >5 min
+		const isActive = a.status === "running" || a.status === "spawning";
+		const activityTs = a.lastActivityAt ?? a.createdAt;
+		const activityAge = now - new Date(activityTs + (activityTs.endsWith("Z") ? "" : "Z")).getTime();
+		const isStalled = isActive && activityAge > 5 * 60_000;
+		const stateLabel = isStalled ? "stalled?" : a.status;
+		const state = isStalled ? c.yellow(pad(stateLabel, 12)) : theme.color(pad(stateLabel, 12));
+		const staleIcon = isStalled ? c.yellow("⚠") : " ";
+
+		const taskId = c.cyan(pad(truncate(a.taskId, 18), 18));
+		output += writeLine(startRow + 2 + i, 1, `${indent}${icon}  ${name} ${cap} ${state} ${taskId} ${dur} ${staleIcon}`, width);
 	}
 
 	return { output, rowsUsed: 2 + visible.length };

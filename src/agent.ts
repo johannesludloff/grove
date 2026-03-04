@@ -245,10 +245,34 @@ export async function spawnAgent(opts: {
 	// Update task assignment
 	updateTask(opts.taskId, { status: "in_progress", assignedTo: opts.name });
 
+	// If this agent has a parent, bump the parent's last_activity_at (child spawn = parent is active)
+	if (opts.parentName) {
+		db.prepare("UPDATE agents SET last_activity_at = datetime('now') WHERE name = ?").run(opts.parentName);
+	}
+
+	// Poll stdout.txt for new output every 10s and update last_activity_at
+	const stdoutFile = `${logDir}/stdout.txt`;
+	let lastKnownSize = 0;
+	const activityPoller = setInterval(() => {
+		try {
+			const file = Bun.file(stdoutFile);
+			const size = file.size;
+			if (size > lastKnownSize) {
+				lastKnownSize = size;
+				getDb()
+					.prepare("UPDATE agents SET last_activity_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')")
+					.run(opts.name);
+			}
+		} catch {
+			// File may not exist yet — ignore
+		}
+	}, 10_000);
+
 	// Watch for process exit in the background
 	// Use getDb() instead of captured `db` — the CLI's postAction hook closes
 	// the original connection before this callback fires.
 	proc.exited.then(async (exitCode) => {
+		clearInterval(activityPoller);
 		const liveDb = getDb();
 		const status: AgentStatus = exitCode === 0 ? "completed" : "failed";
 		liveDb
@@ -304,6 +328,7 @@ export async function spawnAgent(opts: {
 		parentName: opts.parentName ?? null,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
+		lastActivityAt: null,
 	};
 
 	return { agent, pid };
@@ -523,7 +548,8 @@ export function getAgent(name: string): Agent | null {
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
 			        task_id as taskId, parent_name as parentName,
-			        created_at as createdAt, updated_at as updatedAt
+			        created_at as createdAt, updated_at as updatedAt,
+			        last_activity_at as lastActivityAt
 		   FROM agents WHERE name = ?`,
 		)
 		.get(name) as Agent | null;
@@ -539,7 +565,8 @@ export function listAgents(status?: AgentStatus): Agent[] {
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
 			        task_id as taskId, parent_name as parentName,
-			        created_at as createdAt, updated_at as updatedAt
+			        created_at as createdAt, updated_at as updatedAt,
+			        last_activity_at as lastActivityAt
 		   FROM agents ${where} ORDER BY created_at DESC`,
 		)
 		.all(...params) as Agent[];

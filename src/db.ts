@@ -43,7 +43,8 @@ function ensureTables(db: Database): void {
 			task_id TEXT NOT NULL,
 			parent_name TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_activity_at TEXT
 		);
 
 		CREATE TABLE IF NOT EXISTS mail (
@@ -101,6 +102,13 @@ function ensureTables(db: Database): void {
 		CREATE INDEX IF NOT EXISTS idx_merge_queue_status ON merge_queue(status);
 		CREATE INDEX IF NOT EXISTS idx_merge_queue_branch_name ON merge_queue(branch_name);
 	`);
+
+	// Migrate: add last_activity_at column if it doesn't exist yet
+	try {
+		db.exec("ALTER TABLE agents ADD COLUMN last_activity_at TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
 }
 
 /** Initialize the database with all tables */

@@ -291,9 +291,19 @@ program
 			}
 		}
 
+		const fmtLastActive = (a: (typeof agents)[0]): string => {
+			if (a.status !== "running" && a.status !== "spawning") return "";
+			const ts = a.lastActivityAt ?? a.createdAt;
+			const ageMs = Date.now() - new Date(ts + (ts.endsWith("Z") ? "" : "Z")).getTime();
+			const ageMin = Math.floor(ageMs / 60_000);
+			if (ageMin < 1) return " [active <1m ago]";
+			const stale = ageMin >= 5 ? " ⚠" : "";
+			return ` [active ${ageMin}m ago${stale}]`;
+		};
+
 		const fmt = (a: (typeof agents)[0], prefix: string) => {
 			const pid = a.pid ? ` (PID ${a.pid})` : "";
-			console.log(`${prefix}[${a.status}] ${a.name} — ${a.capability} on ${a.branch}${pid}`);
+			console.log(`${prefix}[${a.status}] ${a.name} — ${a.capability} on ${a.branch}${pid}${fmtLastActive(a)}`);
 		};
 
 		for (const root of roots) {
