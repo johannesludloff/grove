@@ -92,7 +92,7 @@ export function listTasks(status?: TaskStatus): Task[] {
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
 			        created_at as createdAt, updated_at as updatedAt
-		   FROM tasks ${where} ORDER BY created_at ASC`,
+		   FROM tasks ${where} ORDER BY created_at DESC`,
 		)
 		.all(...params) as Task[];
 }
