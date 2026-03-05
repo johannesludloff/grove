@@ -395,6 +395,15 @@ mailCmd
 			process.exit(0);
 		}
 
+		// Skip polling if no agents are actively running or spawning
+		const activeAgents = [
+			...listAgents("running"),
+			...listAgents("spawning"),
+		];
+		if (activeAgents.length === 0) {
+			process.exit(0);
+		}
+
 		const MAX_POLLS = 10;
 		const POLL_INTERVAL_MS = 30_000;
 
