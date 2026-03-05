@@ -395,21 +395,31 @@ mailCmd
 			process.exit(0);
 		}
 
-		const messages = checkMail("orchestrator");
-		if (messages.length === 0) {
-			process.exit(0);
+		const MAX_POLLS = 10;
+		const POLL_INTERVAL_MS = 30_000;
+
+		for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+			const messages = checkMail("orchestrator");
+			if (messages.length > 0) {
+				// Format messages and mark each as read
+				const lines: string[] = [`${messages.length} unread message(s) for orchestrator:\n`];
+				for (const m of messages) {
+					lines.push(`  #${m.id} [${m.type}] from ${m.from}: ${m.subject}`);
+					lines.push(`    ${m.body}`);
+					markRead(m.id);
+				}
+				const reason = lines.join("\n");
+				process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
+				process.exit(0);
+			}
+
+			if (attempt < MAX_POLLS - 1) {
+				await Bun.sleep(POLL_INTERVAL_MS);
+			}
 		}
 
-		// Format messages and mark each as read
-		const lines: string[] = [`${messages.length} unread message(s) for orchestrator:\n`];
-		for (const m of messages) {
-			lines.push(`  #${m.id} [${m.type}] from ${m.from}: ${m.subject}`);
-			lines.push(`    ${m.body}`);
-			markRead(m.id);
-		}
-
-		const reason = lines.join("\n");
-		process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
+		// Timeout reached — exit silently
+		process.exit(0);
 	});
 
 mailCmd
