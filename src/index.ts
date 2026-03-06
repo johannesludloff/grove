@@ -6,7 +6,7 @@ import { closeDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { createTask, getTask, listTasks } from "./tasks.ts";
-import { spawnAgent, stopAgent, listAgents, cleanAgent } from "./agent.ts";
+import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies } from "./agent.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
 import { addMemory, listMemories, removeMemory } from "./memory.ts";
 import { startDashboard } from "./dashboard.ts";
@@ -257,6 +257,12 @@ program
 	.command("status")
 	.description("Show all agents and their state")
 	.action(() => {
+		// Reconcile zombie agents before displaying status
+		const zombies = reconcileZombies();
+		if (zombies.length > 0) {
+			console.log(`Reconciled ${zombies.length} zombie agent(s): ${zombies.join(", ")}`);
+		}
+
 		const agents = listAgents();
 		if (agents.length === 0) {
 			console.log("No agents.");
@@ -394,6 +400,9 @@ mailCmd
 		if (data.stop_hook_active) {
 			process.exit(0);
 		}
+
+		// Reconcile zombie agents so dead PIDs don't keep us polling
+		reconcileZombies();
 
 		// Skip polling if no agents are actively running or spawning
 		const activeAgents = [
@@ -617,6 +626,9 @@ program
 				return { passed: code === 0, output: (stdout + stderr).trim() };
 			}
 
+			// Reconcile zombie agents before processing merges
+			reconcileZombies();
+
 			if (opts.branch) {
 				const agents = listAgents();
 				const agent = agents.find((a) => a.branch === opts.branch);
@@ -724,6 +736,9 @@ program
 	.description("Clean up completed/stopped agent worktrees")
 	.argument("[name]", "Specific agent to clean (or all completed)")
 	.action(async (name?: string) => {
+		// Reconcile zombie agents before cleaning
+		reconcileZombies();
+
 		if (name) {
 			await cleanAgent(name);
 			console.log(`Cleaned up agent: ${name}`);

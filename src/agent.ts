@@ -275,6 +275,25 @@ export async function spawnAgent(opts: {
 
 	const activityPoller = setInterval(async () => {
 		try {
+			// PID liveness check — if process is dead, mark failed immediately
+			if (!isPidAlive(pid)) {
+				clearInterval(activityPoller);
+				getDb()
+					.prepare("UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')")
+					.run(opts.name);
+				emit("agent.failed", `Agent "${opts.name}" process died (PID ${pid} not alive)`, { agent: opts.name });
+				const recipient = opts.parentName ?? "orchestrator";
+				sendMail({
+					from: opts.name,
+					to: recipient,
+					subject: `Agent ${opts.name} died unexpectedly`,
+					body: `Process (PID ${pid}) is no longer alive. Auto-marked as failed. Capability: ${opts.capability}.`,
+					type: "error",
+				});
+				updateTask(opts.taskId, { status: "failed" });
+				return;
+			}
+
 			const file = Bun.file(stdoutFile);
 			const size = file.size;
 			const now = Date.now();
@@ -629,6 +648,68 @@ export function listAgents(status?: AgentStatus): Agent[] {
 		   FROM agents ${where} ORDER BY created_at DESC`,
 		)
 		.all(...params) as Agent[];
+}
+
+/** Check if a PID is alive (process exists and is running) */
+export function isPidAlive(pid: number): boolean {
+	try {
+		// signal 0 doesn't kill — just checks if process exists
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Reconcile DB state with actual PID liveness.
+ * Any agent marked 'running' or 'spawning' whose PID is dead gets marked 'failed'
+ * and an error mail is sent to its parent (or orchestrator).
+ * Returns the list of agent names that were marked as zombies.
+ */
+export function reconcileZombies(): string[] {
+	const db = getDb();
+	const active = db
+		.prepare(
+			`SELECT name, pid, capability, task_id as taskId, parent_name as parentName
+			 FROM agents WHERE status IN ('running', 'spawning')`,
+		)
+		.all() as Array<{
+		name: string;
+		pid: number | null;
+		capability: string;
+		taskId: string;
+		parentName: string | null;
+	}>;
+
+	const zombies: string[] = [];
+
+	for (const agent of active) {
+		// No PID recorded or PID is dead → zombie
+		if (agent.pid == null || !isPidAlive(agent.pid)) {
+			db.prepare(
+				"UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?",
+			).run(agent.name);
+
+			emit("agent.failed", `Agent "${agent.name}" detected as zombie (PID ${agent.pid ?? "none"} not alive)`, {
+				agent: agent.name,
+			});
+
+			const recipient = agent.parentName ?? "orchestrator";
+			sendMail({
+				from: agent.name,
+				to: recipient,
+				subject: `Agent ${agent.name} died (zombie detected)`,
+				body: `Process (PID ${agent.pid ?? "none"}) is no longer alive but DB still showed running. Auto-marked as failed. Capability: ${agent.capability}, task: ${agent.taskId}.`,
+				type: "error",
+			});
+
+			updateTask(agent.taskId, { status: "failed" });
+			zombies.push(agent.name);
+		}
+	}
+
+	return zombies;
 }
 
 /** Stop a running agent */
