@@ -210,12 +210,12 @@ program
 	.argument("<task-id>", "Task to work on")
 	.requiredOption("-n, --name <name>", "Unique agent name")
 	.option("-c, --capability <type>", "builder | scout | reviewer | lead", "builder")
-	.option("-m, --model <model>", "Claude model to use", "sonnet")
+	.option("-m, --model <model>", "Claude model to use (default: per-capability: scouts/reviewers=claude-sonnet-4-6, builders/leads=claude-opus-4-6)")
 	.option("--parent <name>", "Parent agent name")
 	.action(
 		async (
 			taskId: string,
-			opts: { name: string; capability: string; model: string; parent?: string },
+			opts: { name: string; capability: string; model?: string; parent?: string },
 		) => {
 			const task = getTask(taskId);
 			if (!task) {

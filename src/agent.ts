@@ -141,6 +141,22 @@ const ALLOWED_TOOLS: Record<AgentCapability, string> = {
 	lead: "Bash,Read,Write,Edit,Glob,Grep",
 };
 
+/** Default Claude model per capability */
+const CAPABILITY_MODELS: Record<AgentCapability, string> = {
+	builder: "claude-opus-4-6",
+	scout: "claude-sonnet-4-6",
+	reviewer: "claude-sonnet-4-6",
+	lead: "claude-opus-4-6",
+};
+
+/** Inactivity timeout in ms per capability — agent is killed if no stdout for this long */
+const CAPABILITY_TIMEOUTS: Record<AgentCapability, number> = {
+	scout: 3 * 60_000,      // 3 minutes
+	builder: 10 * 60_000,   // 10 minutes
+	reviewer: 5 * 60_000,   // 5 minutes
+	lead: 15 * 60_000,      // 15 minutes
+};
+
 /** Spawn a new Claude Code agent in a worktree */
 export async function spawnAgent(opts: {
 	name: string;
@@ -210,7 +226,7 @@ export async function spawnAgent(opts: {
 	const promptFile = `${logDir}/prompt.txt`;
 	await Bun.write(promptFile, prompt);
 
-	const model = opts.model ?? "sonnet";
+	const model = opts.model ?? CAPABILITY_MODELS[opts.capability];
 	const args = [
 		"claude",
 		"-p",
@@ -253,15 +269,58 @@ export async function spawnAgent(opts: {
 	// Poll stdout.txt for new output every 10s and update last_activity_at
 	const stdoutFile = `${logDir}/stdout.txt`;
 	let lastKnownSize = 0;
-	const activityPoller = setInterval(() => {
+	const timeoutMs = CAPABILITY_TIMEOUTS[opts.capability];
+	const HEARTBEAT_INTERVAL_MS = 2 * 60_000;
+	let lastHeartbeatAt = Date.now();
+
+	const activityPoller = setInterval(async () => {
 		try {
 			const file = Bun.file(stdoutFile);
 			const size = file.size;
+			const now = Date.now();
 			if (size > lastKnownSize) {
 				lastKnownSize = size;
 				getDb()
 					.prepare("UPDATE agents SET last_activity_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')")
 					.run(opts.name);
+				// Send heartbeat mail if enough time has passed since last heartbeat
+				if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+					lastHeartbeatAt = now;
+					const recipient = opts.parentName ?? "orchestrator";
+					sendMail({
+						from: opts.name,
+						to: recipient,
+						subject: `Heartbeat: ${opts.name}`,
+						body: `Agent is running and producing output (stdout: ${size} bytes).`,
+						type: "status",
+					});
+				}
+			} else {
+				// Check timeout: has the agent been silent too long?
+				const agent = getAgent(opts.name);
+				if (!agent || agent.status !== "running") return;
+				const activityTs = agent.lastActivityAt ?? agent.createdAt;
+				const silenceMs = now - new Date(activityTs.endsWith("Z") ? activityTs : activityTs + "Z").getTime();
+				if (silenceMs > timeoutMs) {
+					clearInterval(activityPoller);
+					// Kill the process
+					if (agent.pid) {
+						try { process.kill(agent.pid, "SIGTERM"); } catch { /* already gone */ }
+					}
+					getDb()
+						.prepare("UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?")
+						.run(opts.name);
+					emit("agent.failed", `Agent "${opts.name}" timed out after ${timeoutMs / 60_000}min with no output`, { agent: opts.name });
+					const recipient = opts.parentName ?? "orchestrator";
+					sendMail({
+						from: opts.name,
+						to: recipient,
+						subject: `Agent ${opts.name} timed out`,
+						body: `Auto-stopped after ${timeoutMs / 60_000} minutes with no output. Capability: ${opts.capability}.`,
+						type: "error",
+					});
+					updateTask(opts.taskId, { status: "failed" });
+				}
 			}
 		} catch {
 			// File may not exist yet — ignore
