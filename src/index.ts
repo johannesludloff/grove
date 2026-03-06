@@ -578,10 +578,12 @@ program
 				branchName: string,
 				agentName: string,
 				taskId: string,
+				parentName?: string | null,
 			): Promise<void> {
 				const filesModified = await getModifiedFiles(branchName);
 				const entry = enqueue({ branchName, taskId, agentName, filesModified });
-				console.log(`\n  Enqueued: ${branchName} (queue #${entry.id})`);
+				const parentTag = parentName ? ` (parent: ${parentName})` : "";
+				console.log(`\n  Enqueued: ${branchName}${parentTag} (queue #${entry.id})`);
 
 				const result = await resolve({ branchName, canonicalBranch, repoRoot });
 
@@ -606,12 +608,13 @@ program
 				const agent = agents.find((a) => a.branch === opts.branch);
 				const agentName = agent?.name ?? opts.branch;
 				const taskId = agent?.taskId ?? "manual";
+				const parentName = agent?.parentName ?? null;
 
 				if (opts.dryRun) {
 					await dryRunMerge(opts.branch);
 				} else {
 					console.log(`Merging ${opts.branch} into ${canonicalBranch}...`);
-					await doMerge(opts.branch, agentName, taskId);
+					await doMerge(opts.branch, agentName, taskId, parentName);
 				}
 			} else {
 				// --all
@@ -628,7 +631,7 @@ program
 					if (opts.dryRun) {
 						await dryRunMerge(agent.branch);
 					} else {
-						await doMerge(agent.branch, agent.name, agent.taskId);
+						await doMerge(agent.branch, agent.name, agent.taskId, agent.parentName);
 					}
 				}
 
