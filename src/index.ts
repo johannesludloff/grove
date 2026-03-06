@@ -513,7 +513,7 @@ program
 				console.log(`[dry-run] Target branch: ${canonicalBranch}`);
 			}
 
-			/** Get files modified in branch relative to canonical */
+			/** Get files modified in branch relative to canonical (excludes .grove/* runtime files) */
 			async function getModifiedFiles(branchName: string): Promise<string[]> {
 				const proc = Bun.spawn(
 					["git", "diff", "--name-only", `${canonicalBranch}...${branchName}`],
@@ -524,7 +524,7 @@ program
 				return out
 					.split("\n")
 					.map((l) => l.trim())
-					.filter(Boolean);
+					.filter((l) => l && !l.startsWith(".grove/"));
 			}
 
 			/** Dry-run a merge: report modified files and conflict status without committing */
@@ -664,9 +664,17 @@ program
 			console.log(`Cleaned up agent: ${name}`);
 		} else {
 			const agents = listAgents();
+			const mergedBranches = new Set(listMergeQueue("merged").map((e) => e.branchName));
 			let cleaned = 0;
 			for (const a of agents) {
 				if (a.status === "completed" || a.status === "stopped" || a.status === "failed") {
+					// Refuse to clean completed agents whose branch has not been merged yet
+					if (a.status === "completed" && !mergedBranches.has(a.branch)) {
+						console.log(
+							`  Skipping ${a.name}: branch ${a.branch} has not been merged. Run 'grove merge --all' first.`,
+						);
+						continue;
+					}
 					try {
 						await cleanAgent(a.name);
 						cleaned++;
