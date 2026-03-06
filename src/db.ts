@@ -49,6 +49,7 @@ function ensureTables(db: Database): void {
 			branch TEXT NOT NULL,
 			task_id TEXT NOT NULL,
 			parent_name TEXT,
+			depth INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			last_activity_at TEXT
@@ -113,6 +114,13 @@ function ensureTables(db: Database): void {
 	// Migrate: add last_activity_at column if it doesn't exist yet
 	try {
 		db.exec("ALTER TABLE agents ADD COLUMN last_activity_at TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add depth column if it doesn't exist yet
+	try {
+		db.exec("ALTER TABLE agents ADD COLUMN depth INTEGER NOT NULL DEFAULT 0");
 	} catch {
 		// Column already exists — ignore
 	}

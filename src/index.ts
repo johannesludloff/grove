@@ -212,10 +212,12 @@ program
 	.option("-c, --capability <type>", "builder | scout | reviewer | lead", "builder")
 	.option("-m, --model <model>", "Claude model to use (default: per-capability: scouts/reviewers=claude-sonnet-4-6, builders/leads=claude-opus-4-6)")
 	.option("--parent <name>", "Parent agent name")
+	.option("--depth <n>", "Explicit spawn depth (auto-derived from parent if omitted)")
+	.option("--max-depth <n>", "Maximum spawn depth (default: 2)")
 	.action(
 		async (
 			taskId: string,
-			opts: { name: string; capability: string; model?: string; parent?: string },
+			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string },
 		) => {
 			const task = getTask(taskId);
 			if (!task) {
@@ -233,11 +235,14 @@ program
 				baseBranch,
 				model: opts.model,
 				parentName: opts.parent,
+				depth: opts.depth ? Number(opts.depth) : undefined,
+				maxDepth: opts.maxDepth ? Number(opts.maxDepth) : undefined,
 			});
 
 			console.log(`Spawned agent: ${result.agent.name} (PID ${result.pid})`);
 			console.log(`  Capability: ${result.agent.capability}`);
 			console.log(`  Branch: ${result.agent.branch}`);
+			console.log(`  Depth: ${result.agent.depth}`);
 			console.log(`  Worktree: ${result.agent.worktree}`);
 		},
 	);

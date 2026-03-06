@@ -17,6 +17,7 @@ export interface Agent {
 	branch: string;
 	taskId: string;
 	parentName: string | null;
+	depth: number;
 	createdAt: string;
 	updatedAt: string;
 	lastActivityAt: string | null;

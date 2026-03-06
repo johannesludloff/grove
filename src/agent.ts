@@ -22,7 +22,10 @@ const STOPWORDS = new Set([
 /** System prompts per capability */
 const SYSTEM_PROMPTS: Record<AgentCapability, string> = {
 	builder: `You are a builder agent. Your job is to implement code changes for the given task.
-Focus on writing clean, working code. When done, commit your changes and report back.`,
+Focus on writing clean, working code. When done, commit your changes and report back.
+
+## Spec File
+If a spec file exists at \`.grove/specs/<task-id>.md\`, read it before starting. It contains your objective, acceptance criteria, owned files, context, and dependencies. You MUST only modify files listed in the spec's "File Scope" section — modifying other files risks merge conflicts with parallel builders.`,
 
 	scout: `You are a scout agent. Your job is to explore the codebase and gather information.
 Do NOT modify any files. Read, search, and analyze only. Report your findings.`,
@@ -54,16 +57,30 @@ Before every action, log your reasoning explicitly in your output:
 
 This must appear in your output before each delegation decision. The orchestrator uses this to audit your choices.
 
+## Complexity Assessment (file-count thresholds)
+
+Before spawning anything, estimate the number of files your task touches:
+
+| Tier | File Count | Strategy |
+|------|-----------|----------|
+| **Simple** | 1–3 files, focused area | Handle directly. No sub-agents needed. |
+| **Moderate** | 3–6 files, focused area | Spawn 1 builder with a spec file. Lead self-verifies the diff. |
+| **Complex** | 6+ files or multiple subsystems | Full scout → spec → build → review pipeline. |
+
+Log your tier assessment: "**Tier: <Simple/Moderate/Complex>** — estimated <N> files across <area(s)>."
+
 ## Workflow
 
 1. **Assess complexity** — Determine scope before touching any code:
-   - **Simple** (single file, trivial change in <5 lines, code already read): Do it yourself. Log: "**Handling directly** because <reason>."
-   - **Moderate** (one clear task, exact files known): Spawn a single builder. Log: "**Spawning builder** for <subtask> because <reason>."
-   - **Complex** (multiple files, unclear scope, or code not yet read): **Spawn a scout first. Always.** Log: "**Spawning scout** for <subtask> because <reason>."
+   - **Simple** (1–3 files, code already read): Do it yourself. Log: "**Handling directly** because <reason>."
+   - **Moderate** (3–6 files, exact files known): Spawn a single builder. Log: "**Spawning builder** for <subtask> because <reason>."
+   - **Complex** (6+ files, unclear scope, or code not yet read): **Spawn a scout first. Always.** Log: "**Spawning scout** for <subtask> because <reason>."
 
-   > **Spawn bias**: Default to spawning builders or scouts for non-trivial work. Only self-handle if the change is <5 lines and you have already read all affected files.
+   > **Spawn bias**: Default to spawning builders or scouts for non-trivial work. Only self-handle if the change is ≤3 files and you have already read all affected files.
 
    > **Scout bias**: When in doubt, scout. Scouts are fast, read-only, and free you to plan concurrently. Writing a builder spec without scouting first produces vague specs and broken builds.
+
+   > **Dual-scout pattern**: For tasks spanning 2+ subsystems (e.g. backend + frontend, CLI + library), spawn 2 scouts in parallel with distinct focus areas. This gives broader coverage faster than a single sequential scout.
 
 2. **Phase 1 — Scout** (skip only if you already know the exact files and changes needed):
    \`\`\`bash
@@ -72,7 +89,34 @@ This must appear in your output before each delegation decision. The orchestrato
    \`\`\`
    Wait for scout mail, then use its findings to write precise builder specs.
 
-3. **Phase 2 — Build** — Spawn builders grounded in scout findings:
+   For multi-subsystem tasks, spawn parallel scouts:
+   \`\`\`bash
+   grove spawn scout-backend -n backend-scout -c scout --parent <your-name>
+   grove spawn scout-frontend -n frontend-scout -c scout --parent <your-name>
+   \`\`\`
+
+3. **Phase 2 — Spec & Build** — Write spec files, then spawn builders:
+
+   **Before spawning each builder**, write a spec file at \`.grove/specs/<task-id>.md\`:
+   \`\`\`markdown
+   # <task-id>
+   ## Objective
+   <What this builder must accomplish>
+   ## Acceptance Criteria
+   - [ ] <Criterion 1>
+   - [ ] <Criterion 2>
+   ## File Scope (owned files)
+   - path/to/file1.ts
+   - path/to/file2.ts
+   ## Context
+   <Relevant types, patterns, interfaces from scout findings>
+   ## Dependencies
+   <Other tasks this depends on, or "none">
+   \`\`\`
+
+   **File ownership rule**: Each builder's spec MUST list the files it owns. Before spawning, verify that no two builders own the same file. If there is overlap, restructure the tasks to eliminate it.
+
+   Then spawn the builder:
    \`\`\`bash
    grove task add <task-id> "<title>" --description "<detailed spec with exact file paths from scout>"
    grove spawn <task-id> -n <agent-name> -c builder --parent <your-name>
@@ -121,6 +165,8 @@ This must appear in your output before each delegation decision. The orchestrato
 - Do NOT spawn more than 4 sub-workers at a time.
 - Prefer spawning builders/scouts over self-handling non-trivial work.
 - Always ground builder specs in code paths you (or a scout) have actually read.
+- Always write a spec file before spawning a builder (Moderate or Complex tier).
+- Always verify file ownership non-overlap before spawning parallel builders.
 - If a worker fails, read its logs (\`.grove/logs/<agent-name>/stderr.log\`) to diagnose.
 - Cap builder revisions at 3 — if a builder fails review 3 times, escalate via mail to orchestrator.
 
@@ -130,7 +176,8 @@ This must appear in your output before each delegation decision. The orchestrato
 - **UNNECESSARY_SPAWN** — Spawning an agent for a task small enough to do in 3 lines. Overhead exceeds benefit.
 - **SILENT_FAILURE** — Not mailing the orchestrator when blocked or when a worker fails after 3 retries.
 - **INFINITE_REVISION** — Retrying a builder more than 3 times without escalating.
-- **SILENT_DELEGATION** — Not logging delegation reasoning before each action. The orchestrator cannot audit what the lead did or why.`,
+- **SILENT_DELEGATION** — Not logging delegation reasoning before each action. The orchestrator cannot audit what the lead did or why.
+- **OVERLAPPING_FILE_SCOPE** — Two or more builders owning the same file. Causes merge conflicts. Always verify non-overlap in spec files before spawning.`,
 };
 
 /** Tool restrictions per capability */
@@ -157,6 +204,9 @@ const CAPABILITY_TIMEOUTS: Record<AgentCapability, number> = {
 	lead: 15 * 60_000,      // 15 minutes
 };
 
+/** Default maximum spawn depth (orchestrator=0 → lead=1 → worker=2) */
+const MAX_SPAWN_DEPTH = 2;
+
 /** Spawn a new Claude Code agent in a worktree */
 export async function spawnAgent(opts: {
 	name: string;
@@ -166,6 +216,8 @@ export async function spawnAgent(opts: {
 	baseBranch: string;
 	model?: string;
 	parentName?: string;
+	depth?: number;
+	maxDepth?: number;
 }): Promise<SpawnResult> {
 	const db = getDb();
 
@@ -177,13 +229,32 @@ export async function spawnAgent(opts: {
 		throw new Error(`Agent "${opts.name}" is already active`);
 	}
 
+	// Compute depth: if explicit depth provided use it, else derive from parent
+	let depth = opts.depth ?? 0;
+	if (depth === 0 && opts.parentName) {
+		const parent = db
+			.prepare("SELECT depth FROM agents WHERE name = ?")
+			.get(opts.parentName) as { depth: number } | null;
+		depth = (parent?.depth ?? 0) + 1;
+	}
+
+	// Enforce depth limit
+	const maxDepth = opts.maxDepth ?? MAX_SPAWN_DEPTH;
+	if (depth > maxDepth) {
+		throw new Error(
+			`Spawn depth ${depth} exceeds maximum ${maxDepth}. ` +
+			`Agent "${opts.name}" cannot be spawned as a child of "${opts.parentName}". ` +
+			`Depth chain: orchestrator(0) → lead(1) → worker(2).`,
+		);
+	}
+
 	// Create worktree
 	const { worktreePath, branch } = await createWorktree(opts.name, opts.baseBranch);
 
 	// Register agent in DB
 	const stmt = db.prepare(`
-		INSERT INTO agents (name, capability, status, worktree, branch, task_id, parent_name)
-		VALUES (?, ?, 'spawning', ?, ?, ?, ?)
+		INSERT INTO agents (name, capability, status, worktree, branch, task_id, parent_name, depth)
+		VALUES (?, ?, 'spawning', ?, ?, ?, ?, ?)
 	`);
 	stmt.run(
 		opts.name,
@@ -192,6 +263,7 @@ export async function spawnAgent(opts: {
 		branch,
 		opts.taskId,
 		opts.parentName ?? null,
+		depth,
 	);
 
 	// Query and inject relevant memories (task-aware filtering)
@@ -404,6 +476,7 @@ export async function spawnAgent(opts: {
 		branch,
 		taskId: opts.taskId,
 		parentName: opts.parentName ?? null,
+		depth,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 		lastActivityAt: null,
@@ -625,7 +698,7 @@ export function getAgent(name: string): Agent | null {
 	return db
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
-			        task_id as taskId, parent_name as parentName,
+			        task_id as taskId, parent_name as parentName, depth,
 			        created_at as createdAt, updated_at as updatedAt,
 			        last_activity_at as lastActivityAt
 		   FROM agents WHERE name = ?`,
@@ -642,7 +715,7 @@ export function listAgents(status?: AgentStatus): Agent[] {
 	return db
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
-			        task_id as taskId, parent_name as parentName,
+			        task_id as taskId, parent_name as parentName, depth,
 			        created_at as createdAt, updated_at as updatedAt,
 			        last_activity_at as lastActivityAt
 		   FROM agents ${where} ORDER BY created_at DESC`,
