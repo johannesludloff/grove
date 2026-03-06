@@ -498,8 +498,9 @@ program
 	.option("--all", "Merge all completed agent branches")
 	.option("--into <branch>", "Target branch (default: read from .grove/base-branch.txt)")
 	.option("--dry-run", "Check conflicts only, don't merge")
+	.option("--review", "After merge --all, spawn a reviewer agent for integration review")
 	.action(
-		async (opts: { branch?: string; all?: boolean; into?: string; dryRun?: boolean }) => {
+		async (opts: { branch?: string; all?: boolean; into?: string; dryRun?: boolean; review?: boolean }) => {
 			if (!opts.branch && !opts.all) {
 				console.error("Specify --branch <name> or --all");
 				process.exit(1);
@@ -603,6 +604,19 @@ program
 				}
 			}
 
+			/** Run tsc --noEmit and return pass/fail with output */
+			async function runTypecheck(): Promise<{ passed: boolean; output: string }> {
+				const proc = Bun.spawn(["bun", "run", "typecheck"], {
+					cwd: repoRoot,
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const code = await proc.exited;
+				const stdout = await new Response(proc.stdout).text();
+				const stderr = await new Response(proc.stderr).text();
+				return { passed: code === 0, output: (stdout + stderr).trim() };
+			}
+
 			if (opts.branch) {
 				const agents = listAgents();
 				const agent = agents.find((a) => a.branch === opts.branch);
@@ -645,6 +659,57 @@ program
 						await dryRunMerge(agent.branch);
 					} else {
 						await doMerge(agent.branch, agent.name, agent.taskId, agent.parentName);
+					}
+				}
+
+				if (!opts.dryRun) {
+					// Post-merge typecheck
+					console.log("\n--- Post-merge validation ---");
+					console.log("Running typecheck (tsc --noEmit)...");
+					const { passed, output } = await runTypecheck();
+					if (passed) {
+						console.log("  Typecheck: PASSED");
+					} else {
+						console.log("  Typecheck: FAILED");
+						if (output) {
+							const lines = output.split("\n");
+							for (const line of lines.slice(0, 20)) {
+								console.log(`    ${line}`);
+							}
+							if (lines.length > 20) {
+								console.log(`    ... (${lines.length - 20} more lines)`);
+							}
+						}
+					}
+
+					// Spawn reviewer if requested
+					if (opts.review) {
+						if (!passed) {
+							console.log("\n  Skipping integration review: typecheck failed. Fix errors first.");
+						} else {
+							console.log("\n  Spawning integration reviewer...");
+							const reviewTaskId = `integration-review-${Date.now()}`;
+							const mergedSummary = toMerge
+								.map((a) => `- ${a.branch} (${a.name})`)
+								.join("\n");
+							const taskDescription =
+								`Integration review for branches merged into ${canonicalBranch}.\n\nMerged branches:\n${mergedSummary}\n\nRun: git log --oneline ${canonicalBranch}~${toMerge.length}..${canonicalBranch} to see what was merged.\n\nCheck for: 1) Duplicate implementations, 2) Conflicting patterns, 3) Missing cross-feature wiring, 4) Logical regressions. Report PASS or FAIL with specific findings.`;
+							createTask({ taskId: reviewTaskId, title: "Integration review after merge --all", description: taskDescription });
+							const reviewerName = `integration-reviewer-${Date.now()}`;
+							try {
+								const result = await spawnAgent({
+									name: reviewerName,
+									capability: "reviewer",
+									taskId: reviewTaskId,
+									taskDescription,
+									baseBranch: canonicalBranch,
+								});
+								console.log(`  Reviewer spawned: ${result.agent.name} (PID ${result.pid})`);
+								console.log("  Check results with: grove mail check orchestrator");
+							} catch (err) {
+							  console.error(`  Failed to spawn reviewer: ${err}`);
+							}
+						}
 					}
 				}
 
