@@ -88,9 +88,9 @@ export async function resolve(opts: ResolveOptions): Promise<MergeResult> {
 	}
 
 	// Gather conflicted files
-	const conflictFiles = await getConflictFiles(repoRoot);
+	const allConflictFiles = await getConflictFiles(repoRoot);
 
-	if (conflictFiles.length === 0) {
+	if (allConflictFiles.length === 0) {
 		// Non-conflict merge failure (e.g. unrelated histories, missing branch)
 		await git(["merge", "--abort"], repoRoot);
 		return {
@@ -98,6 +98,40 @@ export async function resolve(opts: ResolveOptions): Promise<MergeResult> {
 			tier: "clean-merge",
 			conflictFiles: [],
 			errorMessage: mergeResult.stderr.trim() || "Merge failed with no conflict files",
+		};
+	}
+
+	// Resolve .grove/* conflicts by keeping our (canonical) version — these are
+	// shared runtime files (SQLite DB, WAL) that cannot be text-merged and may
+	// be locked by the running Grove process.
+	const groveConflicts = allConflictFiles.filter((f) => f.startsWith(".grove/"));
+	const conflictFiles = allConflictFiles.filter((f) => !f.startsWith(".grove/"));
+
+	for (const groveFile of groveConflicts) {
+		await git(["checkout", "--ours", groveFile], repoRoot);
+		await git(["add", groveFile], repoRoot);
+	}
+
+	// If all conflicts were .grove/* files, commit and succeed
+	if (conflictFiles.length === 0) {
+		const commitResult = await git(
+			["commit", "--no-edit", "-m", `merge: skip .grove/ runtime files from ${branchName}`],
+			repoRoot,
+		);
+		if (commitResult.code === 0) {
+			return {
+				success: true,
+				tier: "clean-merge",
+				conflictFiles: groveConflicts,
+				errorMessage: null,
+			};
+		}
+		await git(["merge", "--abort"], repoRoot);
+		return {
+			success: false,
+			tier: "clean-merge",
+			conflictFiles: groveConflicts,
+			errorMessage: commitResult.stderr.trim() || "Commit after .grove/ resolution failed",
 		};
 	}
 
