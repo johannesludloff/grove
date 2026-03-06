@@ -11,7 +11,7 @@ import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
 import { addMemory, listMemories, removeMemory } from "./memory.ts";
 import { startDashboard } from "./dashboard.ts";
 import { startFeed, showRecentEvents } from "./feed.ts";
-import { enqueue, updateStatus } from "./merge-queue.ts";
+import { enqueue, updateStatus, list as listMergeQueue } from "./merge-queue.ts";
 import { resolve } from "./merge-resolver.ts";
 import { prime } from "./prime.ts";
 import { installHooks, uninstallHooks, statusHooks } from "./hooks.ts";
@@ -621,10 +621,23 @@ program
 					return;
 				}
 
+				// Skip branches already successfully merged
+				const alreadyMerged = new Set(listMergeQueue("merged").map((e) => e.branchName));
+
+				// Sort by completion time (oldest first = chronological order)
+				const toMerge = agents
+					.filter((a) => !alreadyMerged.has(a.branch))
+					.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+
+				if (toMerge.length === 0) {
+					console.log("No completed agents to merge (all already merged).");
+					return;
+				}
+
 				console.log(
-					`Processing ${agents.length} completed agent(s) into ${canonicalBranch}...`,
+					`Processing ${toMerge.length} completed agent(s) into ${canonicalBranch}...`,
 				);
-				for (const agent of agents) {
+				for (const agent of toMerge) {
 					if (opts.dryRun) {
 						await dryRunMerge(agent.branch);
 					} else {
