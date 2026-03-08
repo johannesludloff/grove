@@ -92,6 +92,7 @@ function ensureTables(db: Database): void {
 			description TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
 			assigned_to TEXT,
+			retry_count INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
@@ -121,6 +122,13 @@ function ensureTables(db: Database): void {
 	// Migrate: add depth column if it doesn't exist yet
 	try {
 		db.exec("ALTER TABLE agents ADD COLUMN depth INTEGER NOT NULL DEFAULT 0");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add retry_count column to tasks if it doesn't exist yet
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
 	} catch {
 		// Column already exists — ignore
 	}

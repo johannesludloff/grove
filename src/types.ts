@@ -45,6 +45,7 @@ export interface Task {
 	description: string;
 	status: TaskStatus;
 	assignedTo: string | null;
+	retryCount: number;
 	createdAt: string;
 	updatedAt: string;
 }
