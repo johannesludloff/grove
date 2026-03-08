@@ -65,6 +65,19 @@ function resolveConflictMarkers(content: string): string {
 	return result.join("\n");
 }
 
+/** Run tsc --noEmit to typecheck the resolved code before committing */
+async function runTypecheck(cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+	const proc = Bun.spawn(["bunx", "tsc", "--noEmit"], {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const code = await proc.exited;
+	const stdout = await new Response(proc.stdout).text();
+	const stderr = await new Response(proc.stderr).text();
+	return { code, stdout, stderr };
+}
+
 /**
  * Resolve merge conflicts between an agent branch and the canonical branch.
  *
@@ -143,6 +156,22 @@ export async function resolve(opts: ResolveOptions): Promise<MergeResult> {
 			const resolved = resolveConflictMarkers(raw);
 			await Bun.write(absPath, resolved);
 			await git(["add", relPath], repoRoot);
+		}
+
+		// Run typecheck before committing to catch type errors introduced by
+		// blindly keeping the incoming (agent) side of conflicts.
+		const hasTypeScript = conflictFiles.some((f) => f.endsWith(".ts") || f.endsWith(".tsx"));
+		if (hasTypeScript) {
+			const tscResult = await runTypecheck(repoRoot);
+			if (tscResult.code !== 0) {
+				await git(["merge", "--abort"], repoRoot);
+				return {
+					success: false,
+					tier: "auto-resolve",
+					conflictFiles,
+					errorMessage: `Typecheck failed after auto-resolve:\n${tscResult.stdout}${tscResult.stderr}`,
+				};
+			}
 		}
 
 		const commitResult = await git(
