@@ -9,6 +9,7 @@ import { createTask, getTask, listTasks } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies } from "./agent.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
 import { addMemory, listMemories, removeMemory } from "./memory.ts";
+import { DEFAULT_POWER_MODEL, DEFAULT_FAST_MODEL } from "./models.ts";
 import { startDashboard } from "./dashboard.ts";
 import { startFeed, showRecentEvents } from "./feed.ts";
 import { enqueue, updateStatus, list as listMergeQueue } from "./merge-queue.ts";
@@ -210,7 +211,7 @@ program
 	.argument("<task-id>", "Task to work on")
 	.requiredOption("-n, --name <name>", "Unique agent name")
 	.option("-c, --capability <type>", "builder | scout | reviewer | lead", "builder")
-	.option("-m, --model <model>", "Claude model to use (default: per-capability: scouts/reviewers=claude-sonnet-4-6, builders/leads=claude-opus-4-6)")
+	.option("-m, --model <model>", `Claude model to use (default: scouts/reviewers=${DEFAULT_FAST_MODEL}, builders/leads=${DEFAULT_POWER_MODEL})`)
 	.option("--parent <name>", "Parent agent name")
 	.option("--depth <n>", "Explicit spawn depth (auto-derived from parent if omitted)")
 	.option("--max-depth <n>", "Maximum spawn depth (default: 2)")
