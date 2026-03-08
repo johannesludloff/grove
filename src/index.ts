@@ -750,24 +750,26 @@ program
 		} else {
 			const agents = listAgents();
 			const mergedBranches = new Set(listMergeQueue("merged").map((e) => e.branchName));
-			let cleaned = 0;
+
+			// Partition agents into cleanable vs skipped
+			const toClean: typeof agents = [];
 			for (const a of agents) {
 				if (a.status === "completed" || a.status === "stopped" || a.status === "failed") {
-					// Refuse to clean completed agents whose branch has not been merged yet
 					if (a.status === "completed" && !mergedBranches.has(a.branch)) {
 						console.log(
 							`  Skipping ${a.name}: branch ${a.branch} has not been merged. Run 'grove merge --all' first.`,
 						);
 						continue;
 					}
-					try {
-						await cleanAgent(a.name);
-						cleaned++;
-					} catch {
-						// Skip if worktree already gone
-					}
+					toClean.push(a);
 				}
 			}
+
+			// Clean all eligible agents in parallel
+			const cleanResults = await Promise.allSettled(
+				toClean.map((a) => cleanAgent(a.name)),
+			);
+			let cleaned = cleanResults.filter((r) => r.status === "fulfilled").length;
 
 			// Stop and clean orphaned agents whose parent has failed or stopped
 			const deadParents = new Set(
@@ -779,15 +781,20 @@ program
 					a.parentName != null &&
 					deadParents.has(a.parentName),
 			);
+			// Stop orphans sequentially (cascade), then clean in parallel
 			for (const orphan of orphans) {
 				console.log(`Stopping orphaned agent ${orphan.name} (parent ${orphan.parentName} is ${agents.find((a) => a.name === orphan.parentName)?.status})`);
 				try {
 					await stopAgent(orphan.name);
-					await cleanAgent(orphan.name);
-					cleaned++;
 				} catch {
 					// Skip if already gone
 				}
+			}
+			if (orphans.length > 0) {
+				const orphanResults = await Promise.allSettled(
+					orphans.map((o) => cleanAgent(o.name)),
+				);
+				cleaned += orphanResults.filter((r) => r.status === "fulfilled").length;
 			}
 
 			console.log(`Cleaned ${cleaned} agent worktree(s).`);

@@ -266,19 +266,16 @@ export async function spawnAgent(opts: {
 		depth,
 	);
 
-	// Query and inject relevant memories (task-aware filtering)
+	// Gather context in parallel: memories, sibling info, and prior work
+	// (these are sync DB queries but grouped for clarity and future async readiness)
 	const memories = queryTaskRelevantMemories(opts.taskDescription);
 	const memoryBlock = renderMemories(memories);
 	if (memories.length > 0) {
 		markUsed(memories.map((m) => m.id));
 	}
-
-	// Build sibling context
 	const siblingBlock = opts.parentName
 		? buildSiblingBlock(opts.parentName, opts.name)
 		: "";
-
-	// Build prior work context
 	const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
 
 	// Build the prompt
@@ -291,12 +288,13 @@ export async function spawnAgent(opts: {
 		priorWorkBlock,
 	);
 
-	// Write prompt to a file and pipe via stdin (avoids Windows arg length limits)
+	// Write log dir marker and prompt file in parallel
 	const logDir = `${process.cwd()}/.grove/logs/${opts.name}`;
-	await Bun.write(`${logDir}/.keep`, "");
-
 	const promptFile = `${logDir}/prompt.txt`;
-	await Bun.write(promptFile, prompt);
+	await Promise.all([
+		Bun.write(`${logDir}/.keep`, ""),
+		Bun.write(promptFile, prompt),
+	]);
 
 	const model = opts.model ?? CAPABILITY_MODELS[opts.capability];
 	const args = [
