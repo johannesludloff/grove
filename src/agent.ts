@@ -7,6 +7,7 @@ import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
 import { updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
+import { resolveModel } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
 
 /** Common English stopwords for keyword extraction */
@@ -188,13 +189,7 @@ const ALLOWED_TOOLS: Record<AgentCapability, string> = {
 	lead: "Bash,Read,Write,Edit,Glob,Grep",
 };
 
-/** Default Claude model per capability */
-const CAPABILITY_MODELS: Record<AgentCapability, string> = {
-	builder: "claude-opus-4-6",
-	scout: "claude-sonnet-4-6",
-	reviewer: "claude-sonnet-4-6",
-	lead: "claude-opus-4-6",
-};
+// Model defaults are configured in src/models.ts
 
 /** Inactivity timeout in ms per capability — agent is killed if no stdout for this long */
 const CAPABILITY_TIMEOUTS: Record<AgentCapability, number> = {
@@ -298,7 +293,7 @@ export async function spawnAgent(opts: {
 	const promptFile = `${logDir}/prompt.txt`;
 	await Bun.write(promptFile, prompt);
 
-	const model = opts.model ?? CAPABILITY_MODELS[opts.capability];
+	const model = resolveModel(opts.capability, opts.model);
 	const args = [
 		"claude",
 		"-p",
