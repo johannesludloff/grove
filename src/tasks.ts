@@ -24,6 +24,7 @@ export function createTask(opts: {
 		description: opts.description ?? "",
 		status: "pending",
 		assignedTo: null,
+		retryCount: 0,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 	};
@@ -39,7 +40,7 @@ export function getTask(taskId: string): Task | null {
 	const row = db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        created_at as createdAt, updated_at as updatedAt
+			        retry_count as retryCount, created_at as createdAt, updated_at as updatedAt
 		   FROM tasks WHERE task_id = ?`,
 		)
 		.get(taskId) as Task | null;
@@ -91,8 +92,22 @@ export function listTasks(status?: TaskStatus): Task[] {
 	return db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        created_at as createdAt, updated_at as updatedAt
+			        retry_count as retryCount, created_at as createdAt, updated_at as updatedAt
 		   FROM tasks ${where} ORDER BY created_at DESC`,
 		)
 		.all(...params) as Task[];
+}
+
+/** Increment a task's retry count and return the new count */
+export function incrementRetryCount(taskId: string): number {
+	const db = getDb();
+	db.prepare(
+		`UPDATE tasks SET retry_count = retry_count + 1, updated_at = datetime('now') WHERE task_id = ?`,
+	).run(taskId);
+
+	const row = db
+		.prepare("SELECT retry_count FROM tasks WHERE task_id = ?")
+		.get(taskId) as { retry_count: number } | null;
+
+	return row?.retry_count ?? 0;
 }

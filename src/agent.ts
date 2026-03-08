@@ -5,7 +5,7 @@ import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
-import { updateTask } from "./tasks.ts";
+import { getTask, incrementRetryCount, updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
@@ -198,6 +198,9 @@ const CAPABILITY_TIMEOUTS: Record<AgentCapability, number> = {
 	reviewer: 5 * 60_000,   // 5 minutes
 	lead: 15 * 60_000,      // 15 minutes
 };
+
+/** Maximum number of automatic retries for failed agents */
+const MAX_RETRIES = 2;
 
 /** Default maximum spawn depth (orchestrator=0 → lead=1 → worker=2) */
 const MAX_SPAWN_DEPTH = 2;
@@ -457,6 +460,20 @@ export async function spawnAgent(opts: {
 		updateTask(opts.taskId, {
 			status: status === "completed" ? "completed" : "failed",
 		});
+
+		// Auto-retry on failure
+		if (status === "failed") {
+			await maybeRetryAgent({
+				taskId: opts.taskId,
+				name: opts.name,
+				capability: opts.capability,
+				baseBranch: opts.baseBranch,
+				taskDescription: opts.taskDescription,
+				parentName: opts.parentName,
+				depth,
+				model: opts.model,
+			});
+		}
 	});
 
 	const agent: Agent = {
@@ -640,6 +657,74 @@ function buildPriorWorkBlock(taskId: string, selfName: string): string {
 	return lines.join("\n");
 }
 
+/**
+ * Attempt to auto-retry a failed agent's task.
+ * Returns true if a retry was spawned, false if retries are exhausted.
+ */
+async function maybeRetryAgent(opts: {
+	taskId: string;
+	name: string;
+	capability: AgentCapability;
+	baseBranch: string;
+	taskDescription: string;
+	parentName?: string | null;
+	depth: number;
+	model?: string;
+}): Promise<boolean> {
+	const task = getTask(opts.taskId);
+	if (!task) return false;
+
+	// Check if retries are exhausted
+	if (task.retryCount >= MAX_RETRIES) return false;
+
+	const newCount = incrementRetryCount(opts.taskId);
+	const retryName = `${opts.name}-retry${newCount}`;
+
+	emit("agent.spawn", `Auto-retrying task "${opts.taskId}" (attempt ${newCount}/${MAX_RETRIES}) as "${retryName}"`, {
+		agent: retryName,
+		detail: `previous=${opts.name} retry=${newCount}`,
+	});
+
+	// Reset task status so the new agent can pick it up
+	updateTask(opts.taskId, { status: "pending" });
+
+	try {
+		await spawnAgent({
+			name: retryName,
+			capability: opts.capability,
+			taskId: opts.taskId,
+			taskDescription: opts.taskDescription,
+			baseBranch: opts.baseBranch,
+			parentName: opts.parentName ?? undefined,
+			depth: opts.depth,
+			model: opts.model,
+		});
+
+		const recipient = opts.parentName ?? "orchestrator";
+		sendMail({
+			from: retryName,
+			to: recipient,
+			subject: `Auto-retrying task ${opts.taskId} (attempt ${newCount}/${MAX_RETRIES})`,
+			body: `Agent "${opts.name}" failed. Automatically spawned "${retryName}" to retry. Previous work is available via prior-work context injection.`,
+			type: "status",
+		});
+
+		return true;
+	} catch (err) {
+		// Retry spawn failed — notify and give up
+		const recipient = opts.parentName ?? "orchestrator";
+		sendMail({
+			from: opts.name,
+			to: recipient,
+			subject: `Auto-retry failed for task ${opts.taskId}`,
+			body: `Attempted to spawn retry agent "${retryName}" but failed: ${err instanceof Error ? err.message : String(err)}`,
+			type: "error",
+		});
+		updateTask(opts.taskId, { status: "failed" });
+		return false;
+	}
+}
+
 /** Build a rich completion mail body with file list and output tail */
 async function buildCompletionMailBody(
 	exitCode: number,
@@ -737,7 +822,8 @@ export function reconcileZombies(): string[] {
 	const db = getDb();
 	const active = db
 		.prepare(
-			`SELECT name, pid, capability, task_id as taskId, parent_name as parentName
+			`SELECT name, pid, capability, task_id as taskId, parent_name as parentName,
+			        branch, depth
 			 FROM agents WHERE status IN ('running', 'spawning')`,
 		)
 		.all() as Array<{
@@ -746,6 +832,8 @@ export function reconcileZombies(): string[] {
 		capability: string;
 		taskId: string;
 		parentName: string | null;
+		branch: string;
+		depth: number;
 	}>;
 
 	const zombies: string[] = [];
@@ -772,6 +860,22 @@ export function reconcileZombies(): string[] {
 
 			updateTask(agent.taskId, { status: "failed" });
 			zombies.push(agent.name);
+
+			// Auto-retry the zombie's task (fire-and-forget)
+			const task = getTask(agent.taskId);
+			if (task) {
+				maybeRetryAgent({
+					taskId: agent.taskId,
+					name: agent.name,
+					capability: agent.capability as AgentCapability,
+					baseBranch: "main",
+					taskDescription: task.description,
+					parentName: agent.parentName,
+					depth: agent.depth,
+				}).catch(() => {
+					// Retry errors are already handled inside maybeRetryAgent
+				});
+			}
 		}
 	}
 
