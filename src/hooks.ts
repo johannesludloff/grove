@@ -83,6 +83,16 @@ export function buildHooksJson(): HooksConfig {
 				],
 			},
 		],
+		SessionEnd: [
+			{
+				hooks: [
+					{
+						type: "command",
+						command: "grove session-end",
+					},
+				],
+			},
+		],
 	};
 }
 
