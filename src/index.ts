@@ -16,6 +16,7 @@ import { enqueue, updateStatus, list as listMergeQueue } from "./merge-queue.ts"
 import { resolve } from "./merge-resolver.ts";
 import { prime } from "./prime.ts";
 import { installHooks, uninstallHooks, statusHooks } from "./hooks.ts";
+import { collectBenchmarks, storeBenchmarkRun, getPreviousRun, displayReport, listRuns } from "./benchmark.ts";
 import type { AgentCapability, MailType, TaskStatus, MergeTier } from "./types.ts";
 import type { MemoryType } from "./memory.ts";
 
@@ -886,6 +887,48 @@ program
 
 		// Keep process alive until interrupted
 		await new Promise(() => {});
+	});
+
+// ── grove benchmark ─────────────────────────────────────────────────────
+const benchCmd = program.command("benchmark").description("Benchmark grove operations");
+
+benchCmd
+	.command("run")
+	.description("Collect metrics and store a benchmark run")
+	.option("--quiet", "Skip report output, just store")
+	.action((opts: { quiet?: boolean }) => {
+		const metrics = collectBenchmarks();
+		const previousRun = getPreviousRun();
+		const runId = storeBenchmarkRun(metrics);
+
+		if (!opts.quiet) {
+			displayReport(metrics, previousRun);
+		}
+		console.log(`Benchmark run stored: ${runId} (${metrics.length} metrics)`);
+	});
+
+benchCmd
+	.command("report")
+	.description("Display the latest benchmark report without storing a new run")
+	.action(() => {
+		const metrics = collectBenchmarks();
+		const previousRun = getPreviousRun();
+		displayReport(metrics, previousRun);
+	});
+
+benchCmd
+	.command("history")
+	.description("List all benchmark runs")
+	.action(() => {
+		const runs = listRuns();
+		if (runs.length === 0) {
+			console.log("No benchmark runs recorded yet. Run: grove benchmark run");
+			return;
+		}
+		console.log("Benchmark runs:");
+		for (const r of runs) {
+			console.log(`  ${r.runId}  ${r.createdAt}  (${r.metricCount} metrics)`);
+		}
 	});
 
 // ── grove guard (PreToolUse hook target) ────────────────────────────────

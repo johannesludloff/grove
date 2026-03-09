@@ -110,6 +110,19 @@ function ensureTables(db: Database): void {
 
 		CREATE INDEX IF NOT EXISTS idx_merge_queue_status ON merge_queue(status);
 		CREATE INDEX IF NOT EXISTS idx_merge_queue_branch_name ON merge_queue(branch_name);
+
+		CREATE TABLE IF NOT EXISTS benchmarks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id TEXT NOT NULL,
+			metric TEXT NOT NULL,
+			value REAL NOT NULL,
+			unit TEXT NOT NULL,
+			detail TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_benchmarks_run_id ON benchmarks(run_id);
+		CREATE INDEX IF NOT EXISTS idx_benchmarks_metric ON benchmarks(metric);
 	`);
 
 	// Migrate: add last_activity_at column if it doesn't exist yet
