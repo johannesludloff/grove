@@ -80,3 +80,22 @@ export interface SpawnResult {
 	agent: Agent;
 	pid: number;
 }
+
+/** A single benchmark metric */
+export interface BenchmarkMetric {
+	metric: string;
+	value: number;
+	unit: string;
+	detail: string | null;
+}
+
+/** A stored benchmark run */
+export interface BenchmarkRun {
+	id: number;
+	runId: string;
+	metric: string;
+	value: number;
+	unit: string;
+	detail: string | null;
+	createdAt: string;
+}
