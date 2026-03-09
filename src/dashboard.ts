@@ -1,13 +1,14 @@
 /**
- * Live TUI dashboard — clean frameless layout with cursor positioning.
+ * Live TUI dashboard — visual hierarchy with hero metrics, collapsed cleaned agents,
+ * color-by-meaning, feed age fade, task status grouping, and compact bottom strip.
  *
  * Layout:
- *   Header bar
- *   Agents section (full width)
+ *   Hero metrics strip
+ *   Agents section (running/spawning/completed/failed only; cleaned collapsed)
  *   ─── separator ───
  *   Feed (left 60%)    Tasks (right 40%)
  *   ─── separator ───
- *   Mail (left 50%)    Memory (right 50%)
+ *   Mail + Memory compact strip
  */
 
 import { listAgents } from "./agent.ts";
@@ -37,12 +38,16 @@ const c = {
 	bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
 	dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
 	green: (s: string) => `\x1b[32m${s}\x1b[0m`,
+	brightGreen: (s: string) => `\x1b[1;32m${s}\x1b[0m`,
 	yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
 	red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 	blue: (s: string) => `\x1b[34m${s}\x1b[0m`,
 	cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
 	magenta: (s: string) => `\x1b[35m${s}\x1b[0m`,
 	gray: (s: string) => `\x1b[90m${s}\x1b[0m`,
+	white: (s: string) => `\x1b[37m${s}\x1b[0m`,
+	brightWhite: (s: string) => `\x1b[1;37m${s}\x1b[0m`,
+	dimWhite: (s: string) => `\x1b[2;37m${s}\x1b[0m`,
 	brandBold: (s: string) => `\x1b[1;36m${s}\x1b[0m`,
 } as const;
 
@@ -51,7 +56,7 @@ function visibleLength(s: string): number {
 	return s.replace(/\x1b\[[0-9;]*m/g, "").length;
 }
 
-/** Truncate a string with ANSI codes to maxLen visible characters, appending '…' */
+/** Truncate a string with ANSI codes to maxLen visible characters, appending '...' */
 function truncateAnsi(s: string, maxLen: number): string {
 	if (maxLen <= 0) return "";
 	if (visibleLength(s) <= maxLen) return s;
@@ -66,7 +71,7 @@ function truncateAnsi(s: string, maxLen: number): string {
 			i = j + 1;
 		} else {
 			if (count === maxLen - 1) {
-				result += "…";
+				result += "\u2026";
 				result += "\x1b[0m";
 				return result;
 			}
@@ -88,7 +93,7 @@ const PAD_RIGHT = 1; // right margin
 function truncate(str: string, maxLen: number): string {
 	if (maxLen <= 0) return "";
 	if (str.length <= maxLen) return str;
-	return `${str.slice(0, maxLen - 1)}…`;
+	return `${str.slice(0, maxLen - 1)}\u2026`;
 }
 
 function pad(str: string, width: number): string {
@@ -121,9 +126,15 @@ function formatRelativeTime(timestamp: string): string {
 	return `${s}s ago`;
 }
 
+/** Get age in minutes from a timestamp */
+function ageMinutes(timestamp: string): number {
+	const ts = timestamp.endsWith("Z") ? timestamp : timestamp + "Z";
+	return (Date.now() - new Date(ts).getTime()) / 60_000;
+}
+
 /** Dim horizontal separator line */
 function separator(width: number): string {
-	return c.dim("─".repeat(width));
+	return c.dim("\u2500".repeat(width));
 }
 
 /** Write a line at a position, padded/truncated to fit width */
@@ -138,33 +149,13 @@ function writeLine(row: number, col: number, content: string, width: number): st
 // ── Status theme ────────────────────────────────────────────────────────
 
 const STATUS_THEME: Record<AgentStatus, { icon: string; color: (s: string) => string }> = {
-	running: { icon: "●", color: c.green },
-	spawning: { icon: "●", color: c.yellow },
-	failed: { icon: "●", color: c.red },
-	completed: { icon: "●", color: c.cyan },
-	stopped: { icon: "●", color: c.gray },
-	cleaned: { icon: "○", color: c.gray },
+	running: { icon: "\u25cf", color: c.brightGreen },
+	spawning: { icon: "\u25cf", color: c.yellow },
+	failed: { icon: "\u25cf", color: c.red },
+	completed: { icon: "\u25cf", color: c.dimWhite },
+	stopped: { icon: "\u25cf", color: c.gray },
+	cleaned: { icon: "\u25cb", color: c.gray },
 };
-
-function taskStatusDot(status: string): string {
-	switch (status) {
-		case "in_progress": return c.green("●");
-		case "completed": return c.cyan("●");
-		case "failed": return c.red("●");
-		case "pending": return c.yellow("●");
-		default: return c.gray("●");
-	}
-}
-
-function mailTypeColor(type: string): (s: string) => string {
-	switch (type) {
-		case "done": return c.green;
-		case "error": return c.red;
-		case "question": return c.yellow;
-		case "result": return c.cyan;
-		default: return c.gray;
-	}
-}
 
 function eventTypeColor(type: EventType): (s: string) => string {
 	if (type.startsWith("agent.")) return c.cyan;
@@ -196,16 +187,70 @@ function shortEventType(type: EventType): string {
 	return map[type] ?? type.split(".").pop() ?? type;
 }
 
-// ── Section renderers ───────────────────────────────────────────────────
+// ── 1. Hero Metrics Strip ───────────────────────────────────────────────
+
+function renderHeroStrip(
+	agents: Agent[],
+	tasks: Task[],
+	memories: Memory[],
+	width: number,
+	startRow: number,
+): string {
+	const indent = " ".repeat(PAD_LEFT);
+	const runningCount = agents.filter((a) => a.status === "running" || a.status === "spawning").length;
+	const completedCount = agents.filter((a) => a.status === "completed").length;
+	const taskCount = tasks.length;
+	const memoryCount = memories.length;
+
+	const runningColor = runningCount > 0 ? c.brightGreen : c.dim;
+	const dot = c.dim("\u00b7");
+
+	const strip =
+		`${indent}${c.brandBold("\u258c GROVE")}   ` +
+		`${runningColor(`${runningCount} running`)}  ${dot}  ` +
+		`${c.dimWhite(`${completedCount} completed`)}  ${dot}  ` +
+		`${c.dimWhite(`${taskCount} tasks`)}  ${dot}  ` +
+		`${c.dimWhite(`${memoryCount} memories`)}   ` +
+		`${c.dim("\u27f3 2s")}`;
+
+	return writeLine(startRow, 1, strip, width);
+}
+
+// ── 2. Agents (collapsed cleaned) ───────────────────────────────────────
+
+/** Color agent name by capability: lead=bold, scout/reviewer=dim, builder=normal */
+function colorByCapability(name: string, capability: string): string {
+	switch (capability) {
+		case "lead": return c.bold(name);
+		case "scout":
+		case "reviewer": return c.dim(name);
+		default: return name;
+	}
+}
+
+/** Color agent name by status: running=bright green, completed=dim white, failed=red */
+function colorByStatus(name: string, status: AgentStatus): string {
+	switch (status) {
+		case "running":
+		case "spawning": return c.brightGreen(name);
+		case "completed": return c.dimWhite(name);
+		case "failed": return c.red(name);
+		default: return c.gray(name);
+	}
+}
 
 function renderAgents(agents: Agent[], width: number, maxRows: number, startRow: number): { output: string; rowsUsed: number } {
 	let output = "";
 	const indent = " ".repeat(PAD_LEFT);
 
-	// Section header
-	output += writeLine(startRow, 1, `${indent}${c.bold("Agents")} ${c.dim(`(${agents.length})`)}`, width);
+	// Separate cleaned from visible agents
+	const cleanedAgents = agents.filter((a) => a.status === "cleaned");
+	const visibleAgents = agents.filter((a) => a.status !== "cleaned");
 
-	if (agents.length === 0) {
+	const totalLabel = `${visibleAgents.length}${cleanedAgents.length > 0 ? `+${cleanedAgents.length}` : ""}`;
+	output += writeLine(startRow, 1, `${indent}${c.bold("Agents")} ${c.dim(`(${totalLabel})`)}`, width);
+
+	if (visibleAgents.length === 0 && cleanedAgents.length === 0) {
 		output += writeLine(startRow + 1, 1, `${indent}${c.dim("No agents")}`, width);
 		return { output, rowsUsed: 2 };
 	}
@@ -219,12 +264,12 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 	const activeStates = ["running", "spawning"];
 	const sortScore = (a: Agent) => (activeStates.includes(a.status) ? 0 : 1);
 
-	// Build hierarchy
-	const agentNames = new Set(agents.map((a) => a.name));
+	// Build hierarchy (only from visible agents)
+	const agentNames = new Set(visibleAgents.map((a) => a.name));
 	const childrenMap = new Map<string, Agent[]>();
 	const roots: Agent[] = [];
 
-	for (const a of agents) {
+	for (const a of visibleAgents) {
 		if (a.parentName && agentNames.has(a.parentName)) {
 			const siblings = childrenMap.get(a.parentName) ?? [];
 			siblings.push(a);
@@ -239,7 +284,6 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		children.sort((a, b) => sortScore(a) - sortScore(b));
 	}
 
-	// Flatten into ordered rows: root, then its children, then next root, etc.
 	const ordered: Array<{ agent: Agent; isChild: boolean }> = [];
 	for (const root of roots) {
 		ordered.push({ agent: root, isChild: false });
@@ -248,15 +292,19 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		}
 	}
 
-	const visible = ordered.slice(0, maxRows);
+	// Reserve 1 row for cleaned summary if needed
+	const cleanedRow = cleanedAgents.length > 0 ? 1 : 0;
+	const agentSlots = Math.max(0, maxRows - cleanedRow);
+	const visible = ordered.slice(0, agentSlots);
 	const now = Date.now();
 
 	for (let i = 0; i < visible.length; i++) {
 		const { agent: a, isChild } = visible[i]!;
 		const theme = STATUS_THEME[a.status];
 		const icon = theme.color(theme.icon);
-		const rawName = isChild ? ` └─ ${truncate(a.name, 18)}` : truncate(a.name, 22);
-		const name = c.cyan(pad(rawName, 22));
+		const rawName = isChild ? ` \u2514\u2500 ${truncate(a.name, 18)}` : truncate(a.name, 22);
+		// Apply capability coloring, then status coloring
+		const styledName = colorByStatus(colorByCapability(pad(rawName, 22), a.capability), a.status);
 		const cap = pad(a.capability, 10);
 		const endTime =
 			a.status === "completed" || a.status === "failed" || a.status === "stopped"
@@ -265,20 +313,41 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		const elapsed = endTime - new Date(a.createdAt + "Z").getTime();
 		const dur = formatDuration(elapsed);
 
-		// Stall detection: warn if running/spawning agent had no activity for >5 min
+		// Stall detection
 		const isActive = a.status === "running" || a.status === "spawning";
 		const activityTs = a.lastActivityAt ?? a.createdAt;
 		const activityAge = now - new Date(activityTs + (activityTs.endsWith("Z") ? "" : "Z")).getTime();
 		const isStalled = isActive && activityAge > 5 * 60_000;
 		const stateLabel = isStalled ? "stalled?" : a.status;
 		const state = isStalled ? c.yellow(pad(stateLabel, 12)) : theme.color(pad(stateLabel, 12));
-		const staleIcon = isStalled ? c.yellow("⚠") : " ";
+		const staleIcon = isStalled ? c.yellow("\u26a0") : " ";
 
-		const taskId = c.cyan(pad(truncate(a.taskId, 18), 18));
-		output += writeLine(startRow + 2 + i, 1, `${indent}${icon}  ${name} ${cap} ${state} ${taskId} ${dur} ${staleIcon}`, width);
+		const taskId = c.dim(pad(truncate(a.taskId, 18), 18));
+		output += writeLine(startRow + 2 + i, 1, `${indent}${icon}  ${styledName} ${cap} ${state} ${taskId} ${dur} ${staleIcon}`, width);
 	}
 
-	return { output, rowsUsed: 2 + visible.length };
+	let rowsUsed = 2 + visible.length;
+
+	// Collapsed cleaned summary
+	if (cleanedAgents.length > 0) {
+		output += writeLine(startRow + rowsUsed, 1,
+			`${indent}${c.dim(`\u25b8 ${cleanedAgents.length} cleaned`)}`,
+			width,
+		);
+		rowsUsed += 1;
+	}
+
+	return { output, rowsUsed };
+}
+
+// ── 4. Feed with age fade ───────────────────────────────────────────────
+
+/** Apply age-based color fade: <2min bright white, 2-10min normal, >10min dim */
+function ageFade(text: string, timestamp: string): string {
+	const age = ageMinutes(timestamp);
+	if (age < 2) return c.brightWhite(text);
+	if (age < 10) return text;
+	return c.dim(text);
 }
 
 function renderFeed(events: GroveEvent[], width: number, maxRows: number, startRow: number, startCol: number): string {
@@ -300,18 +369,20 @@ function renderFeed(events: GroveEvent[], width: number, maxRows: number, startR
 	for (let i = 0; i < visible.length; i++) {
 		const ev = visible[i]!;
 		const colorFn = eventTypeColor(ev.type);
-		const typeTag = c.dim(colorFn(pad(shortEventType(ev.type), 5)));
-		const agentPart = ev.agent ? ` ${c.cyan(truncate(ev.agent, 8))}` : "";
+		const typeTag = colorFn(pad(shortEventType(ev.type), 5));
+		const agentPart = ev.agent ? ` ${truncate(ev.agent, 8)}` : "";
 		const agentPartLen = ev.agent ? 1 + Math.min(ev.agent.length, 8) : 0;
-		const time = c.dim(formatRelativeTime(ev.createdAt));
+		const time = formatRelativeTime(ev.createdAt);
 		const timeLen = visibleLength(time);
 		const summaryMax = Math.max(0, contentWidth - 5 - agentPartLen - 1 - timeLen - 1 - 3);
 		const summary = truncate(ev.summary, summaryMax);
-		const leftPart = `${typeTag}${agentPart} ${summary}`;
-		const leftPartLen = visibleLength(leftPart);
-		const midPadLen = Math.max(1, contentWidth - leftPartLen - timeLen);
-		const line = `${indent}${leftPart}${" ".repeat(midPadLen)}${time}`;
-		output += writeLine(startRow + 1 + i, startCol, line, width);
+		const rawLine = `${typeTag}${agentPart} ${summary}`;
+		const rawLineLen = visibleLength(rawLine);
+		const midPadLen = Math.max(1, contentWidth - rawLineLen - timeLen);
+
+		// Apply age fade to the entire line
+		const fadedLine = ageFade(`${rawLine}${" ".repeat(midPadLen)}${time}`, ev.createdAt);
+		output += writeLine(startRow + 1 + i, startCol, `${indent}${fadedLine}`, width);
 	}
 	for (let i = visible.length; i < maxRows; i++) {
 		output += writeLine(startRow + 1 + i, startCol, " ".repeat(width), width);
@@ -319,6 +390,8 @@ function renderFeed(events: GroveEvent[], width: number, maxRows: number, startR
 
 	return output;
 }
+
+// ── 5. Tasks with status grouping ───────────────────────────────────────
 
 function renderTasks(tasks: Task[], width: number, maxRows: number, startRow: number, startCol: number): string {
 	let output = "";
@@ -326,56 +399,41 @@ function renderTasks(tasks: Task[], width: number, maxRows: number, startRow: nu
 	const contentWidth = width - PAD_LEFT - PAD_RIGHT;
 	const idWidth = contentWidth < 36 ? 8 : 14;
 
-	output += writeLine(startRow, startCol, `${indent}${c.bold("Tasks")} ${c.dim(`(${tasks.length})`)}`, width);
+	// Count by status
+	const inProgress = tasks.filter((t) => t.status === "in_progress");
+	const pending = tasks.filter((t) => t.status === "pending");
+	const completed = tasks.filter((t) => t.status === "completed");
+	const failed = tasks.filter((t) => t.status === "failed");
 
-	if (tasks.length === 0) {
-		output += writeLine(startRow + 1, startCol, `${indent}${c.dim("No tasks")}`, width);
+	// Status summary header
+	const parts: string[] = [];
+	if (inProgress.length > 0) parts.push(c.green(`\u25cf ${inProgress.length} in progress`));
+	if (pending.length > 0) parts.push(c.yellow(`\u25cb ${pending.length} pending`));
+	if (completed.length > 0) parts.push(c.dimWhite(`\u2713 ${completed.length} done`));
+	if (failed.length > 0) parts.push(c.red(`\u2717 ${failed.length} failed`));
+	const statusSummary = parts.join(c.dim("  "));
+
+	output += writeLine(startRow, startCol, `${indent}${c.bold("Tasks")} ${statusSummary}`, width);
+
+	// Show in_progress first, then pending. Hide completed.
+	const displayTasks = [...inProgress, ...pending, ...failed];
+
+	if (displayTasks.length === 0) {
+		output += writeLine(startRow + 1, startCol, `${indent}${c.dim("No active tasks")}`, width);
 		for (let i = 2; i <= maxRows; i++) {
 			output += writeLine(startRow + i, startCol, " ".repeat(width), width);
 		}
 		return output;
 	}
 
-	const visible = tasks.slice(0, maxRows);
-	for (let i = 0; i < visible.length; i++) {
-		const t = visible[i]!;
-		const dot = taskStatusDot(t.status);
+	const shown = displayTasks.slice(0, maxRows);
+	for (let i = 0; i < shown.length; i++) {
+		const t = shown[i]!;
+		const dot = t.status === "in_progress" ? c.green("\u25cf") : t.status === "failed" ? c.red("\u25cf") : c.yellow("\u25cb");
 		const id = c.cyan(pad(truncate(t.taskId, idWidth), idWidth));
 		const titleMax = Math.max(0, contentWidth - 1 - 1 - idWidth - 1);
 		const title = truncate(t.title, titleMax);
 		output += writeLine(startRow + 1 + i, startCol, `${indent}${dot} ${id} ${title}`, width);
-	}
-	for (let i = visible.length; i < maxRows; i++) {
-		output += writeLine(startRow + 1 + i, startCol, " ".repeat(width), width);
-	}
-
-	return output;
-}
-
-function renderMail(messages: Mail[], width: number, maxRows: number, startRow: number, startCol: number): string {
-	let output = "";
-	const indent = " ".repeat(PAD_LEFT);
-
-	output += writeLine(startRow, startCol, `${indent}${c.bold("Mail")} ${c.dim(`(${messages.length} unread)`)}`, width);
-
-	if (messages.length === 0) {
-		output += writeLine(startRow + 1, startCol, `${indent}${c.dim("No unread messages")}`, width);
-		for (let i = 2; i <= maxRows; i++) {
-			output += writeLine(startRow + i, startCol, " ".repeat(width), width);
-		}
-		return output;
-	}
-
-	const shown = messages.slice(0, maxRows);
-	for (let i = 0; i < shown.length; i++) {
-		const m = shown[i]!;
-		const colorFn = mailTypeColor(m.type);
-		const typeTag = colorFn(`[${m.type}]`);
-		const from = c.cyan(truncate(m.from, 12));
-		const to = c.cyan(truncate(m.to, 12));
-		const subj = truncate(m.subject, width - 40);
-		const time = c.dim(formatRelativeTime(m.createdAt));
-		output += writeLine(startRow + 1 + i, startCol, `${indent}${typeTag} ${from} → ${to}: ${subj} ${time}`, width);
 	}
 	for (let i = shown.length; i < maxRows; i++) {
 		output += writeLine(startRow + 1 + i, startCol, " ".repeat(width), width);
@@ -384,36 +442,45 @@ function renderMail(messages: Mail[], width: number, maxRows: number, startRow: 
 	return output;
 }
 
-function renderMemory(memories: Memory[], width: number, maxRows: number, startRow: number, startCol: number): string {
-	let output = "";
+// ── 6. Compact Mail + Memory strip ──────────────────────────────────────
+
+function renderCompactStrip(
+	unreadMail: Mail[],
+	memories: Memory[],
+	width: number,
+	startRow: number,
+): string {
 	const indent = " ".repeat(PAD_LEFT);
 
-	output += writeLine(startRow, startCol, `${indent}${c.bold("Memory")} ${c.dim(`(${memories.length})`)}`, width);
-
-	if (memories.length === 0) {
-		output += writeLine(startRow + 1, startCol, `${indent}${c.dim("No memories")}`, width);
-		for (let i = 2; i <= maxRows; i++) {
-			output += writeLine(startRow + i, startCol, " ".repeat(width), width);
-		}
-		return output;
+	// Mail part
+	let mailPart: string;
+	if (unreadMail.length === 0) {
+		mailPart = c.dim("\u2709 0 unread");
+	} else {
+		const subjects = unreadMail.slice(0, 3).map((m) => m.subject).join(", ");
+		mailPart = c.yellow(`\u2709 ${unreadMail.length} unread`) + c.dim(`: ${truncate(subjects, 30)}`);
 	}
 
+	// Memory part
 	const byDomain = new Map<string, number>();
 	for (const m of memories) {
 		byDomain.set(m.domain, (byDomain.get(m.domain) ?? 0) + 1);
 	}
-
 	const domainParts: string[] = [];
 	for (const [domain, count] of byDomain) {
-		domainParts.push(`${c.cyan(domain)} ${c.dim(`${count}`)}`);
+		domainParts.push(`${domain}(${count})`);
 	}
-	output += writeLine(startRow + 1, startCol, `${indent}${domainParts.join(c.dim("  ·  "))}`, width);
+	const domainStr = truncate(domainParts.join(" "), 40);
+	const memPart = c.dim(`${memories.length} memories: ${domainStr}`);
 
-	for (let i = 2; i <= maxRows; i++) {
-		output += writeLine(startRow + i, startCol, " ".repeat(width), width);
-	}
+	// Combine on one line
+	const mailLen = visibleLength(mailPart);
+	const memLen = visibleLength(memPart);
+	const available = width - PAD_LEFT - PAD_RIGHT;
+	const gap = Math.max(3, available - mailLen - memLen);
+	const line = `${indent}${mailPart}${" ".repeat(gap)}${memPart}`;
 
-	return output;
+	return writeLine(startRow, 1, line, width);
 }
 
 // ── Main render ─────────────────────────────────────────────────────────
@@ -429,10 +496,16 @@ function renderDashboard(): void {
 	const events = recentEvents(30);
 
 	let output = CURSOR.clear;
-	let row = 3;
+	let row = 2;
 
-	// Agents
-	const agentMaxRows = Math.max(3, Math.min(Math.floor(height * 0.25), agents.length + 1));
+	// Hero metrics strip
+	output += renderHeroStrip(agents, tasks, memories, width, row);
+	row += 2;
+
+	// Agents (cleaned collapsed)
+	const visibleAgentCount = agents.filter((a) => a.status !== "cleaned").length;
+	const cleanedCount = agents.filter((a) => a.status === "cleaned").length;
+	const agentMaxRows = Math.max(3, Math.min(Math.floor(height * 0.25), visibleAgentCount + 1 + (cleanedCount > 0 ? 1 : 0)));
 	const agentResult = renderAgents(agents, width, agentMaxRows, row);
 	output += agentResult.output;
 	row += agentResult.rowsUsed;
@@ -443,7 +516,7 @@ function renderDashboard(): void {
 	row += 1;
 
 	// Middle zone: Feed (left 60%) | Tasks (right 40%)
-	const bottomRows = 4;
+	const bottomRows = 1; // compact strip is just 1 row
 	const middleRows = Math.max(4, height - row - bottomRows - 3);
 	const feedWidth = Math.floor(width * 0.6);
 	const taskWidth = width - feedWidth;
@@ -456,13 +529,9 @@ function renderDashboard(): void {
 	output += writeLine(row, 1, ` ${separator(width - 2)}`, width);
 	row += 1;
 
-	// Bottom: Mail (left 50%) | Memory (right 50%)
-	const mailWidth = Math.floor(width * 0.5);
-	const memoryWidth = width - mailWidth;
-
-	output += renderMail(unreadMail, mailWidth, bottomRows, row, 1);
-	output += renderMemory(memories, memoryWidth, bottomRows, row, mailWidth + 1);
-	row += bottomRows + 1;
+	// Compact mail + memory strip (single row)
+	output += renderCompactStrip(unreadMail, memories, width, row);
+	row += 1;
 
 	output += CURSOR.clearDown;
 	process.stdout.write(output);
