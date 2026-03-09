@@ -236,6 +236,11 @@ export async function spawnAgent(opts: {
 		depth = (parent?.depth ?? 0) + 1;
 	}
 
+	// Prevent duplicate leads on the same task
+	if (opts.capability === "lead") {
+		checkDuplicateLead(opts.taskId);
+	}
+
 	// Enforce depth limit
 	const maxDepth = opts.maxDepth ?? MAX_SPAWN_DEPTH;
 	if (depth > maxDepth) {
@@ -496,6 +501,21 @@ export async function spawnAgent(opts: {
 	};
 
 	return { agent, pid };
+}
+
+/** Check that no other lead is already actively working the given task */
+function checkDuplicateLead(taskId: string): void {
+	const db = getDb();
+	const existing = db
+		.prepare(
+			"SELECT name FROM agents WHERE task_id = ? AND capability = 'lead' AND status IN ('running', 'spawning')",
+		)
+		.get(taskId) as { name: string } | null;
+	if (existing) {
+		throw new Error(
+			`Task ${taskId} already has an active lead: ${existing.name}`,
+		);
+	}
 }
 
 /** Build the full prompt for an agent */
