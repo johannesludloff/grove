@@ -79,6 +79,8 @@ export interface GroveConfig {
 export interface SpawnResult {
 	agent: Agent;
 	pid: number;
+	/** Resolves with the child process exit code when the agent process exits */
+	exitPromise: Promise<number>;
 }
 
 /** A single benchmark metric */

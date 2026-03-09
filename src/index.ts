@@ -259,6 +259,17 @@ program
 			console.log(`  Branch: ${result.agent.branch}`);
 			console.log(`  Depth: ${result.agent.depth}`);
 			console.log(`  Worktree: ${result.agent.worktree}`);
+
+			// Forward SIGTERM/SIGINT to the child process so 'grove stop' propagates
+			const forwardSignal = (signal: NodeJS.Signals) => {
+				try { process.kill(result.pid, signal); } catch { /* child already gone */ }
+			};
+			process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+			process.on("SIGINT", () => forwardSignal("SIGINT"));
+
+			// Wait for the child agent process to exit, then exit with its code
+			const exitCode = await result.exitPromise;
+			process.exit(exitCode ?? 1);
 		},
 	);
 
@@ -1271,7 +1282,7 @@ program
 program.hook("postAction", (_, actionCommand) => {
 	// Don't close DB for long-running commands that poll, or for commands that don't use DB
 	const name = actionCommand.name();
-	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric") return;
+	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric" || name === "spawn") return;
 	closeDb();
 });
 

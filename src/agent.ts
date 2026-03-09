@@ -603,7 +603,7 @@ export async function spawnAgent(opts: {
 		lastActivityAt: null,
 	};
 
-	return { agent, pid };
+	return { agent, pid, exitPromise: proc.exited };
 }
 
 /** Check that no other lead is already actively working the given task */
