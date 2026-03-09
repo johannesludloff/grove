@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { createTask, getTask, listTasks, updateTask } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
 import { emit } from "./events.ts";
@@ -913,6 +914,104 @@ benchCmd
 		}
 	});
 
+// ── grove tool-metric (PostToolUse hook target) ─────────────────────────
+program
+	.command("tool-metric")
+	.description("PostToolUse hook: log tool usage metrics to SQLite")
+	.action(async () => {
+		try {
+			const input = await new Response(Bun.stdin.stream()).text();
+			let data: { tool_name?: string; tool_response?: unknown } = {};
+			try {
+				data = JSON.parse(input) as { tool_name?: string; tool_response?: unknown };
+			} catch {
+				process.exit(0);
+			}
+
+			const toolName = data.tool_name ?? "unknown";
+
+			// Determine agent name from current git branch
+			let agentName = "orchestrator";
+			try {
+				const branch = execSync("git branch --show-current", { encoding: "utf8" }).trim();
+				if (branch.startsWith("grove/")) {
+					agentName = branch.slice("grove/".length);
+				}
+			} catch {
+				// Default to orchestrator
+			}
+
+			// Determine success: check for error indicators in tool_response
+			let success = 1;
+			const response = data.tool_response;
+			if (typeof response === "string" && response.trimStart().toLowerCase().startsWith("error")) {
+				success = 0;
+			} else if (response && typeof response === "object" && (response as Record<string, unknown>).is_error === true) {
+				success = 0;
+			}
+
+			getDb().prepare("INSERT INTO tool_metrics (agent_name, tool_name, success) VALUES (?, ?, ?)").run(agentName, toolName, success);
+			process.exit(0);
+		} catch {
+			process.exit(0);
+		}
+	});
+
+// ── grove metrics ───────────────────────────────────────────────────────
+program
+	.command("metrics")
+	.description("Display tool usage metrics per agent and per tool")
+	.option("--agent <name>", "Filter by specific agent")
+	.action((opts: { agent?: string }) => {
+		const db = getDb();
+
+		// Per-agent summary
+		if (!opts.agent) {
+			const agentRows = db.prepare(
+				"SELECT agent_name, COUNT(*) as total, SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) as failures FROM tool_metrics GROUP BY agent_name ORDER BY total DESC"
+			).all() as { agent_name: string; total: number; failures: number }[];
+
+			if (agentRows.length === 0) {
+				console.log("No tool metrics recorded yet.");
+				return;
+			}
+
+			console.log("Per-agent tool usage:");
+			console.log(`  ${"Agent".padEnd(30)} ${"Total".padStart(6)} ${"Fail".padStart(6)} ${"Success%".padStart(9)}`);
+			console.log(`  ${"─".repeat(30)} ${"─".repeat(6)} ${"─".repeat(6)} ${"─".repeat(9)}`);
+			for (const row of agentRows) {
+				const pct = (((row.total - row.failures) / row.total) * 100).toFixed(1);
+				console.log(`  ${row.agent_name.padEnd(30)} ${String(row.total).padStart(6)} ${String(row.failures).padStart(6)} ${(pct + "%").padStart(9)}`);
+			}
+			console.log();
+		}
+
+		// Per-tool summary
+		const toolQuery = opts.agent
+			? "SELECT tool_name, COUNT(*) as total, SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) as failures FROM tool_metrics WHERE agent_name=? GROUP BY tool_name ORDER BY total DESC"
+			: "SELECT tool_name, COUNT(*) as total, SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) as failures FROM tool_metrics GROUP BY tool_name ORDER BY total DESC";
+
+		const toolRows = opts.agent
+			? (db.prepare(toolQuery).all(opts.agent) as { tool_name: string; total: number; failures: number }[])
+			: (db.prepare(toolQuery).all() as { tool_name: string; total: number; failures: number }[]);
+
+		if (toolRows.length === 0) {
+			if (opts.agent) {
+				console.log(`No tool metrics for agent "${opts.agent}".`);
+			}
+			return;
+		}
+
+		const header = opts.agent ? `Per-tool usage (agent: ${opts.agent}):` : "Per-tool usage (all agents):";
+		console.log(header);
+		console.log(`  ${"Tool".padEnd(30)} ${"Total".padStart(6)} ${"Fail".padStart(6)} ${"Success%".padStart(9)}`);
+		console.log(`  ${"─".repeat(30)} ${"─".repeat(6)} ${"─".repeat(6)} ${"─".repeat(9)}`);
+		for (const row of toolRows) {
+			const pct = (((row.total - row.failures) / row.total) * 100).toFixed(1);
+			console.log(`  ${row.tool_name.padEnd(30)} ${String(row.total).padStart(6)} ${String(row.failures).padStart(6)} ${(pct + "%").padStart(9)}`);
+		}
+	});
+
 // ── grove guard (PreToolUse hook target) ────────────────────────────────
 program
 	.command("guard")
@@ -1042,7 +1141,7 @@ program
 program.hook("postAction", (_, actionCommand) => {
 	// Don't close DB for long-running commands that poll, or for commands that don't use DB
 	const name = actionCommand.name();
-	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard") return;
+	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric") return;
 	closeDb();
 });
 
