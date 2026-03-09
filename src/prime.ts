@@ -43,6 +43,15 @@ export function prime(): void {
 	out.write("3. Report results to user\n");
 	out.write("4. If failed: check `.grove/logs/<name>/stderr.log`, then retry or escalate\n\n");
 
+	// Maintenance crons
+	out.write("## Maintenance Crons (set up once per session)\n\n");
+	out.write("On session start, set up these recurring maintenance tasks using CronCreate:\n\n");
+	out.write("1. **Zombie reconciliation** — every 5 minutes:\n");
+	out.write("   CronCreate with schedule `every 5 minutes`, command `grove status > /dev/null`\n\n");
+	out.write("2. **Auto-clean worktrees** — every 10 minutes:\n");
+	out.write("   CronCreate with schedule `every 10 minutes`, command `grove clean`\n\n");
+	out.write("Use `grove cron list` to check active crons, `grove cron clear` to remove them.\n\n");
+
 	// Active state
 	if (!existsSync(groveDir())) {
 		out.write("## Active State\n\n");

@@ -64,6 +64,9 @@ grove spawn explore-api -n api-scout -c scout
 | `grove dashboard` | Live TUI dashboard |
 | `grove feed` | Stream event feed |
 | `grove memory add <domain> <type> <content>` | Record a learning |
+| `grove cron setup` | Show CronCreate commands for maintenance scheduling |
+| `grove cron list` | List active crons |
+| `grove cron clear` | Remove all grove-related crons |
 
 ## Conventions
 

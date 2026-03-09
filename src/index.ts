@@ -110,6 +110,9 @@ grove spawn explore-api -n api-scout -c scout
 | \`grove dashboard\` | Live TUI dashboard |
 | \`grove feed\` | Stream event feed |
 | \`grove memory add <domain> <type> <content>\` | Record a learning |
+| \`grove cron setup\` | Show CronCreate commands for maintenance scheduling |
+| \`grove cron list\` | List active crons |
+| \`grove cron clear\` | Remove all grove-related crons |
 
 ## Conventions
 
@@ -802,90 +805,68 @@ program
 		}
 	});
 
-// ── grove watch ─────────────────────────────────────────────────────────
-program
-	.command("watch")
-	.description("Background daemon: auto-clean worktrees and reconcile zombies on a schedule")
+// ── grove cron ──────────────────────────────────────────────────────────
+const cronCmd = program.command("cron").description("Manage scheduled maintenance via Claude Code CronCreate");
+
+cronCmd
+	.command("setup")
+	.description("Print CronCreate commands for the orchestrator to schedule maintenance crons")
 	.option("--clean-interval <minutes>", "Minutes between clean sweeps (default: 10)", "10")
 	.option("--zombie-interval <minutes>", "Minutes between zombie reconciliation (default: 5)", "5")
-	.action(async (opts: { cleanInterval: string; zombieInterval: string }) => {
-		const cleanMs = Math.max(1, Number(opts.cleanInterval) || 10) * 60_000;
-		const zombieMs = Math.max(1, Number(opts.zombieInterval) || 5) * 60_000;
+	.action((opts: { cleanInterval: string; zombieInterval: string }) => {
+		const cleanMin = Math.max(1, Number(opts.cleanInterval) || 10);
+		const zombieMin = Math.max(1, Number(opts.zombieInterval) || 5);
 
-		console.log(`Grove watch started`);
-		console.log(`  Zombie reconciliation every ${zombieMs / 60_000}m`);
-		console.log(`  Auto-clean every ${cleanMs / 60_000}m`);
-		console.log("  Press Ctrl+C to stop\n");
+		console.log("To enable grove maintenance crons, the orchestrator should call these Claude Code tools:\n");
+		console.log("1. CronCreate — zombie reconciliation:");
+		console.log(JSON.stringify({
+			schedule: `every ${zombieMin} minutes`,
+			command: "grove status > /dev/null",
+			description: "Grove: reconcile zombie agents",
+		}, null, 2));
+		console.log("\n2. CronCreate — auto-clean worktrees:");
+		console.log(JSON.stringify({
+			schedule: `every ${cleanMin} minutes`,
+			command: "grove clean",
+			description: "Grove: auto-clean finished worktrees",
+		}, null, 2));
+		console.log("\nThe orchestrator's SessionStart hook should call these automatically.");
+	});
 
-		const runZombieCheck = () => {
-			try {
-				const zombies = reconcileZombies();
-				if (zombies.length > 0) {
-					console.log(`[${new Date().toLocaleTimeString()}] Reconciled ${zombies.length} zombie(s): ${zombies.join(", ")}`);
-				}
-			} catch (err) {
-				console.error(`[${new Date().toLocaleTimeString()}] Zombie check error: ${err}`);
-			}
-		};
+cronCmd
+	.command("list")
+	.description("List active crons (wraps CronList)")
+	.action(async () => {
+		const proc = Bun.spawn(["claude", "-p", "Use the CronList tool to list all active crons, then output ONLY the raw result as JSON. No commentary."], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const code = await proc.exited;
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		if (code !== 0) {
+			console.error(`Failed to list crons: ${stderr}`);
+			process.exit(1);
+		}
+		console.log(stdout.trim() || "No active crons.");
+	});
 
-		const runClean = async () => {
-			try {
-				const agents = listAgents();
-				const mergedBranches = new Set(listMergeQueue("merged").map((e) => e.branchName));
-				let cleaned = 0;
-
-				for (const a of agents) {
-					if (a.status === "completed" || a.status === "stopped" || a.status === "failed") {
-						if (a.status === "completed" && !mergedBranches.has(a.branch)) {
-							continue; // Don't clean unmerged completed agents
-						}
-						try {
-							await cleanAgent(a.name);
-							cleaned++;
-						} catch {
-							// Worktree may already be gone
-						}
-					}
-				}
-
-				// Stop and clean orphaned agents whose parent has failed or stopped
-				const deadParents = new Set(
-					agents.filter((a) => a.status === "failed" || a.status === "stopped").map((a) => a.name),
-				);
-				const orphans = agents.filter(
-					(a) =>
-						(a.status === "running" || a.status === "spawning") &&
-						a.parentName != null &&
-						deadParents.has(a.parentName),
-				);
-				for (const orphan of orphans) {
-					try {
-						await stopAgent(orphan.name);
-						await cleanAgent(orphan.name);
-						cleaned++;
-					} catch {
-						// Already gone
-					}
-				}
-
-				if (cleaned > 0) {
-					console.log(`[${new Date().toLocaleTimeString()}] Cleaned ${cleaned} agent worktree(s)`);
-				}
-			} catch (err) {
-				console.error(`[${new Date().toLocaleTimeString()}] Clean error: ${err}`);
-			}
-		};
-
-		// Run both immediately on start
-		runZombieCheck();
-		await runClean();
-
-		// Schedule recurring runs
-		setInterval(runZombieCheck, zombieMs);
-		setInterval(runClean, cleanMs);
-
-		// Keep process alive until interrupted
-		await new Promise(() => {});
+cronCmd
+	.command("clear")
+	.description("Delete all grove-related crons (wraps CronDelete)")
+	.action(async () => {
+		const proc = Bun.spawn(["claude", "-p", "Use CronList to find all crons with 'Grove' or 'grove' in the description, then use CronDelete to delete each one. Output the IDs you deleted. No commentary."], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const code = await proc.exited;
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		if (code !== 0) {
+			console.error(`Failed to clear crons: ${stderr}`);
+			process.exit(1);
+		}
+		console.log(stdout.trim() || "No grove crons found.");
 	});
 
 // ── grove guard (PreToolUse hook target) ────────────────────────────────
@@ -935,7 +916,7 @@ program
 program.hook("postAction", (_, actionCommand) => {
 	// Don't close DB for long-running commands that poll, or for commands that don't use DB
 	const name = actionCommand.name();
-	if (name === "dashboard" || name === "feed" || name === "watch" || name === "prime" || name === "hooks" || name === "guard") return;
+	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard") return;
 	closeDb();
 });
 
