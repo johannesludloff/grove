@@ -1,6 +1,5 @@
 /** Background watchdog for proactive agent health monitoring */
 
-import { getDb } from "./db.ts";
 import { listAgents, isPidAlive, reconcileZombies } from "./agent.ts";
 import { sendMail } from "./mail.ts";
 import { emit } from "./events.ts";
@@ -23,9 +22,6 @@ let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 /** Timestamp of last summary */
 let lastSummaryAt = Date.now();
 
-/** Counts since last summary */
-let completedSinceLastSummary = 0;
-
 /** Whether watchdog is running */
 export function isWatchdogRunning(): boolean {
 	return watchdogInterval !== null;
@@ -36,7 +32,6 @@ export function startWatchdog(): void {
 	if (watchdogInterval) return; // Already running
 
 	lastSummaryAt = Date.now();
-	completedSinceLastSummary = 0;
 	stdoutSizes.clear();
 
 	watchdogInterval = setInterval(() => {
@@ -59,7 +54,6 @@ export function stopWatchdog(): void {
 	clearInterval(watchdogInterval);
 	watchdogInterval = null;
 	stdoutSizes.clear();
-	completedSinceLastSummary = 0;
 
 	emit("agent.stopped", "Watchdog stopped — no agents remain", {
 		agent: "watchdog",
@@ -136,11 +130,7 @@ function runHealthCheck(): void {
 		});
 	}
 
-	// 5. Track completed agents for summary
-	const completed = listAgents("completed");
-	completedSinceLastSummary = completed.length;
-
-	// 6. Periodic health summary every 5 minutes
+	// 5. Periodic health summary every 5 minutes
 	const now = Date.now();
 	if (now - lastSummaryAt >= SUMMARY_INTERVAL_MS) {
 		sendHealthSummary(running.length, stalled.length);
