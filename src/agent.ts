@@ -9,6 +9,7 @@ import { getTask, incrementRetryCount, updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
+import { installAgentHooks } from "./hooks.ts";
 
 /** Common English stopwords for keyword extraction */
 const STOPWORDS = new Set([
@@ -299,6 +300,9 @@ export async function spawnAgent(opts: {
 		worktreePath = wt.worktreePath;
 		branch = wt.branch;
 		worktreeCreated = true;
+
+		// Deploy capability-specific PreToolUse guards to the worktree
+		await installAgentHooks(worktreePath, opts.capability);
 
 		// Register agent in DB
 		const stmt = db.prepare(`
