@@ -3,6 +3,7 @@
 import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import type { AgentCapability } from "./types.ts";
 
 /** Shape of a single hook entry */
 interface HookEntry {
@@ -212,4 +213,88 @@ export function statusHooks(projectRoot: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/** Build capability-specific PreToolUse guard hook groups for agent worktrees */
+export function buildAgentGuards(capability: AgentCapability): HookGroup[] {
+	switch (capability) {
+		case "scout":
+		case "reviewer":
+			// Read-only agents: block all write tools
+			return [
+				{
+					matcher: "Write|Edit|NotebookEdit",
+					hooks: [
+						{
+							type: "command",
+							command:
+								"echo 'BLOCKED: Read-only agent cannot use write tools. Scouts and reviewers are read-only.' >&2 && exit 2",
+						},
+					],
+				},
+			];
+		case "builder":
+			// Builders: block Agent tool (only leads spawn sub-agents)
+			return [
+				{
+					matcher: "Agent",
+					hooks: [
+						{
+							type: "command",
+							command:
+								"echo 'BLOCKED: Builders cannot spawn sub-agents. Only leads can spawn agents.' >&2 && exit 2",
+						},
+					],
+				},
+			];
+		case "lead":
+			// Leads: block Write/Edit on project source files (allow .grove/ and .claude/)
+			// Reuses the existing grove guard command which parses stdin and checks file paths
+			return [
+				{
+					matcher: "Write|Edit|NotebookEdit",
+					hooks: [
+						{
+							type: "command",
+							command: "grove guard",
+						},
+					],
+				},
+			];
+	}
+}
+
+/**
+ * Install capability-specific PreToolUse guards into an agent worktree.
+ * Writes to <worktreePath>/.claude/settings.local.json.
+ */
+export async function installAgentHooks(
+	worktreePath: string,
+	capability: AgentCapability,
+): Promise<void> {
+	const claudeDir = path.join(worktreePath, ".claude");
+	const filePath = path.join(claudeDir, "settings.local.json");
+
+	if (!existsSync(claudeDir)) {
+		await mkdir(claudeDir, { recursive: true });
+	}
+
+	let settings: ClaudeSettings = {};
+	if (existsSync(filePath)) {
+		try {
+			settings = JSON.parse(readFileSync(filePath, "utf-8")) as ClaudeSettings;
+		} catch {
+			settings = {};
+		}
+	}
+
+	const guards = buildAgentGuards(capability);
+	if (guards.length > 0) {
+		settings.hooks = {
+			...settings.hooks,
+			PreToolUse: guards,
+		};
+	}
+
+	await Bun.write(filePath, JSON.stringify(settings, null, 2) + "\n");
 }
