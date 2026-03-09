@@ -104,6 +104,7 @@ grove spawn explore-api -n api-scout -c scout
 | Command | Description |
 |---------|-------------|
 | \`grove task add <id> <title> [-d "<desc>"]\` | Create a task |
+| \`grove task update <id> -s <status>\` | Update task status (pending/in_progress/completed/failed) |
 | \`grove spawn <task-id> -n <name> -c <cap>\` | Spawn agent (builder/scout/reviewer/lead) |
 | \`grove status\` | Show all agents and their state |
 | \`grove merge --all\` | Merge all completed agent branches |
@@ -194,6 +195,26 @@ taskCmd
 	.action((taskId: string, title: string, opts: { description?: string }) => {
 		const task = createTask({ taskId, title, description: opts.description });
 		console.log(`Created task: ${task.taskId} — ${task.title}`);
+	});
+
+taskCmd
+	.command("update")
+	.description("Update a task's status")
+	.argument("<task-id>", "Task ID to update")
+	.requiredOption("-s, --status <status>", "New status (pending/in_progress/completed/failed)")
+	.action((taskId: string, opts: { status: string }) => {
+		const task = getTask(taskId);
+		if (!task) {
+			console.error(`Task "${taskId}" not found.`);
+			process.exit(1);
+		}
+		const validStatuses: TaskStatus[] = ["pending", "in_progress", "completed", "failed"];
+		if (!validStatuses.includes(opts.status as TaskStatus)) {
+			console.error(`Invalid status "${opts.status}". Valid: ${validStatuses.join(", ")}`);
+			process.exit(1);
+		}
+		updateTask(taskId, { status: opts.status as TaskStatus });
+		console.log(`Task "${taskId}" status → ${opts.status}`);
 	});
 
 taskCmd
@@ -705,6 +726,20 @@ program
 					console.log(`  Merged via ${result.tier}`);
 					if (result.conflictFiles.length > 0) {
 						console.log(`  Auto-resolved: ${result.conflictFiles.join(", ")}`);
+					}
+
+					// Auto-complete task if all agents for it are done
+					if (taskId !== "manual") {
+						const db = getDb();
+						const remaining = db
+							.prepare(
+								"SELECT COUNT(*) as count FROM agents WHERE task_id = ? AND status IN ('running', 'spawning')",
+							)
+							.get(taskId) as { count: number };
+						if (remaining.count === 0) {
+							updateTask(taskId, { status: "completed" });
+							console.log(`  Task "${taskId}" auto-completed (all agents done)`);
+						}
 					}
 				} else {
 					const hasConflicts = result.conflictFiles.length > 0;
