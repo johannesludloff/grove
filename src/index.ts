@@ -512,6 +512,68 @@ memoryCmd
 	});
 
 // ── grove merge ─────────────────────────────────────────────────────────
+
+/** Auto-commit .grove/ and .claude/ state files, then check for remaining dirty tracked files */
+async function ensureCleanTree(repoRoot: string): Promise<void> {
+	// Stage any modified .grove/ and .claude/ files
+	const stateProc = Bun.spawn(
+		["git", "diff", "--name-only", "--", ".grove/", ".claude/"],
+		{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+	);
+	await stateProc.exited;
+	const stateFiles = (await new Response(stateProc.stdout).text())
+		.split("\n").map((l) => l.trim()).filter(Boolean);
+
+	// Also check for untracked .grove/ and .claude/ files
+	const untrackedProc = Bun.spawn(
+		["git", "ls-files", "--others", "--exclude-standard", "--", ".grove/", ".claude/"],
+		{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+	);
+	await untrackedProc.exited;
+	const untrackedState = (await new Response(untrackedProc.stdout).text())
+		.split("\n").map((l) => l.trim()).filter(Boolean);
+
+	const allStateFiles = [...stateFiles, ...untrackedState];
+	if (allStateFiles.length > 0) {
+		// Auto-commit grove/claude state files
+		await Bun.spawn(["git", "add", "--", ".grove/", ".claude/"], {
+			cwd: repoRoot, stdout: "pipe", stderr: "pipe",
+		}).exited;
+		const commitProc = Bun.spawn(
+			["git", "commit", "-m", "chore: auto-commit grove state files before merge", "--no-verify"],
+			{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+		);
+		await commitProc.exited;
+		// Commit may fail if nothing staged (e.g. .gitignore excludes them) — that's fine
+	}
+
+	// Check for remaining uncommitted changes to tracked files
+	const diffProc = Bun.spawn(
+		["git", "diff", "--quiet"],
+		{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+	);
+	const diffCode = await diffProc.exited;
+
+	const stagedProc = Bun.spawn(
+		["git", "diff", "--quiet", "--cached"],
+		{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+	);
+	const stagedCode = await stagedProc.exited;
+
+	if (diffCode !== 0 || stagedCode !== 0) {
+		// List the dirty files for a helpful error message
+		const dirtyProc = Bun.spawn(
+			["git", "diff", "--name-only"],
+			{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+		);
+		await dirtyProc.exited;
+		const dirtyFiles = (await new Response(dirtyProc.stdout).text()).trim();
+		throw new Error(
+			`Working tree has uncommitted changes. Commit or stash them before merging.\nDirty files:\n${dirtyFiles}`,
+		);
+	}
+}
+
 program
 	.command("merge")
 	.description("Merge agent branches into the canonical branch")
@@ -530,6 +592,16 @@ program
 			const canonicalBranch =
 				opts.into ?? (await Bun.file(`${groveDir()}/base-branch.txt`).text()).trim();
 			const repoRoot = process.cwd();
+
+			// Guard: auto-commit state files and ensure clean working tree before merge
+			if (!opts.dryRun) {
+				try {
+					await ensureCleanTree(repoRoot);
+				} catch (err) {
+					console.error(err instanceof Error ? err.message : String(err));
+					process.exit(1);
+				}
+			}
 
 			if (opts.dryRun) {
 				console.log(`[dry-run] Target branch: ${canonicalBranch}`);

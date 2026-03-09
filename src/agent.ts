@@ -246,83 +246,107 @@ export async function spawnAgent(opts: {
 		);
 	}
 
-	// Create worktree
-	const { worktreePath, branch } = await createWorktree(opts.name, opts.baseBranch);
+	// Create worktree, register in DB, and spawn process — with rollback on failure
+	let worktreeCreated = false;
+	let dbInserted = false;
+	let worktreePath: string;
+	let branch: string;
+	let proc: ReturnType<typeof Bun.spawn>;
+	let pid: number;
+	let logDir: string;
 
-	// Register agent in DB
-	const stmt = db.prepare(`
-		INSERT INTO agents (name, capability, status, worktree, branch, task_id, parent_name, depth)
-		VALUES (?, ?, 'spawning', ?, ?, ?, ?, ?)
-	`);
-	stmt.run(
-		opts.name,
-		opts.capability,
-		worktreePath,
-		branch,
-		opts.taskId,
-		opts.parentName ?? null,
-		depth,
-	);
+	try {
+		// Create worktree
+		const wt = await createWorktree(opts.name, opts.baseBranch);
+		worktreePath = wt.worktreePath;
+		branch = wt.branch;
+		worktreeCreated = true;
 
-	// Gather context in parallel: memories, sibling info, and prior work
-	// (these are sync DB queries but grouped for clarity and future async readiness)
-	const memories = queryTaskRelevantMemories(opts.taskDescription);
-	const memoryBlock = renderMemories(memories);
-	if (memories.length > 0) {
-		markUsed(memories.map((m) => m.id));
+		// Register agent in DB
+		const stmt = db.prepare(`
+			INSERT INTO agents (name, capability, status, worktree, branch, task_id, parent_name, depth)
+			VALUES (?, ?, 'spawning', ?, ?, ?, ?, ?)
+		`);
+		stmt.run(
+			opts.name,
+			opts.capability,
+			worktreePath,
+			branch,
+			opts.taskId,
+			opts.parentName ?? null,
+			depth,
+		);
+		dbInserted = true;
+
+		// Gather context in parallel: memories, sibling info, and prior work
+		// (these are sync DB queries but grouped for clarity and future async readiness)
+		const memories = queryTaskRelevantMemories(opts.taskDescription);
+		const memoryBlock = renderMemories(memories);
+		if (memories.length > 0) {
+			markUsed(memories.map((m) => m.id));
+		}
+		const siblingBlock = opts.parentName
+			? buildSiblingBlock(opts.parentName, opts.name)
+			: "";
+		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
+
+		// Build the prompt
+		const prompt = buildPrompt(
+			opts.capability,
+			opts.taskDescription,
+			opts.name,
+			memoryBlock,
+			siblingBlock,
+			priorWorkBlock,
+		);
+
+		// Write log dir marker and prompt file in parallel
+		logDir = `${process.cwd()}/.grove/logs/${opts.name}`;
+		const promptFile = `${logDir}/prompt.txt`;
+		await Promise.all([
+			Bun.write(`${logDir}/.keep`, ""),
+			Bun.write(promptFile, prompt),
+		]);
+
+		const model = resolveModel(opts.capability, opts.model);
+		const effort = resolveEffort(opts.capability);
+		const args = [
+			"claude",
+			"-p",
+			"--model",
+			model,
+			"--effort",
+			effort,
+			"--allowedTools",
+			ALLOWED_TOOLS[opts.capability] ?? "",
+			"--dangerously-skip-permissions",
+		];
+
+		proc = Bun.spawn(args, {
+			cwd: worktreePath,
+			stdout: Bun.file(`${logDir}/stdout.txt`),
+			stderr: Bun.file(`${logDir}/stderr.log`),
+			stdin: Bun.file(promptFile),
+			env: { ...process.env, PATH: process.env.PATH, CLAUDECODE: "" },
+		});
+
+		pid = proc.pid;
+
+		// Update agent with PID and mark running
+		db.prepare("UPDATE agents SET pid = ?, status = 'running', updated_at = datetime('now') WHERE name = ?").run(
+			pid,
+			opts.name,
+		);
+	} catch (err) {
+		// Rollback: clean up DB entry and worktree on spawn failure
+		if (dbInserted) {
+			try { db.prepare("DELETE FROM agents WHERE name = ?").run(opts.name); } catch { /* best-effort */ }
+		}
+		if (worktreeCreated) {
+			try { await removeWorktree(opts.name); } catch { /* best-effort */ }
+		}
+		throw err;
 	}
-	const siblingBlock = opts.parentName
-		? buildSiblingBlock(opts.parentName, opts.name)
-		: "";
-	const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
-
-	// Build the prompt
-	const prompt = buildPrompt(
-		opts.capability,
-		opts.taskDescription,
-		opts.name,
-		memoryBlock,
-		siblingBlock,
-		priorWorkBlock,
-	);
-
-	// Write log dir marker and prompt file in parallel
-	const logDir = `${process.cwd()}/.grove/logs/${opts.name}`;
-	const promptFile = `${logDir}/prompt.txt`;
-	await Promise.all([
-		Bun.write(`${logDir}/.keep`, ""),
-		Bun.write(promptFile, prompt),
-	]);
-
-	const model = resolveModel(opts.capability, opts.model);
-	const effort = resolveEffort(opts.capability);
-	const args = [
-		"claude",
-		"-p",
-		"--model",
-		model,
-		"--effort",
-		effort,
-		"--allowedTools",
-		ALLOWED_TOOLS[opts.capability] ?? "",
-		"--dangerously-skip-permissions",
-	];
-
-	const proc = Bun.spawn(args, {
-		cwd: worktreePath,
-		stdout: Bun.file(`${logDir}/stdout.txt`),
-		stderr: Bun.file(`${logDir}/stderr.log`),
-		stdin: Bun.file(promptFile),
-		env: { ...process.env, PATH: process.env.PATH, CLAUDECODE: "" },
-	});
-
-	const pid = proc.pid;
-
-	// Update agent with PID and mark running
-	db.prepare("UPDATE agents SET pid = ?, status = 'running', updated_at = datetime('now') WHERE name = ?").run(
-		pid,
-		opts.name,
-	);
 
 	emit("agent.spawn", `Spawned ${opts.capability} agent "${opts.name}" on ${branch}`, {
 		agent: opts.name,
