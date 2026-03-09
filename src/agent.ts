@@ -459,22 +459,11 @@ export async function spawnAgent(opts: {
 
 	const activityPoller = setInterval(async () => {
 		try {
-			// PID liveness check — if process is dead, mark failed immediately
+			// Skip if process is already dead — let proc.exited.then() handle
+			// status updates authoritatively (it knows the exit code).
+			// reconcileZombies() serves as the safety net for orphaned agents.
 			if (!isPidAlive(pid)) {
 				clearInterval(activityPoller);
-				getDb()
-					.prepare("UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')")
-					.run(opts.name);
-				emit("agent.failed", `Agent "${opts.name}" process died (PID ${pid} not alive)`, { agent: opts.name });
-				const recipient = opts.parentName ?? "orchestrator";
-				sendMail({
-					from: opts.name,
-					to: recipient,
-					subject: `Agent ${opts.name} died unexpectedly`,
-					body: `Process (PID ${pid}) is no longer alive. Auto-marked as failed. Capability: ${opts.capability}.`,
-					type: "error",
-				});
-				updateTask(opts.taskId, { status: "failed" });
 				return;
 			}
 
@@ -537,8 +526,14 @@ export async function spawnAgent(opts: {
 		clearInterval(activityPoller);
 		const liveDb = getDb();
 		const status: AgentStatus = exitCode === 0 ? "completed" : "failed";
+		// Only update if still running/spawning, or upgrading from 'failed' to 'completed'.
+		// This prevents overwriting a correct status set by reconcileZombies or the watchdog.
 		liveDb
-			.prepare("UPDATE agents SET status = ?, updated_at = datetime('now') WHERE name = ?")
+			.prepare(
+				status === "completed"
+					? "UPDATE agents SET status = ?, updated_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning', 'failed')"
+					: "UPDATE agents SET status = ?, updated_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')",
+			)
 			.run(status, opts.name);
 
 		emit(status === "completed" ? "agent.completed" : "agent.failed", `Agent "${opts.name}" ${status} (exit ${exitCode})`, {
@@ -1067,41 +1062,61 @@ export function reconcileZombies(): string[] {
 	for (const agent of active) {
 		// No PID recorded or PID is dead → zombie
 		if (agent.pid == null || !isPidAlive(agent.pid)) {
-			db.prepare(
-				"UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?",
-			).run(agent.name);
+			// Check if the agent already sent completion mail — if so, the process
+			// exited successfully but the DB status update didn't flush in time.
+			// Mark as 'completed' instead of incorrectly flagging as failed.
+			const completionMail = db
+				.prepare("SELECT id FROM mail WHERE from_agent = ? AND type = 'done' LIMIT 1")
+				.get(agent.name) as { id: number } | null;
 
-			emit("agent.failed", `Agent "${agent.name}" detected as zombie (PID ${agent.pid ?? "none"} not alive)`, {
-				agent: agent.name,
-			});
+			if (completionMail) {
+				db.prepare(
+					"UPDATE agents SET status = 'completed', updated_at = datetime('now') WHERE name = ?",
+				).run(agent.name);
 
-			const recipient = agent.parentName ?? "orchestrator";
-			sendMail({
-				from: agent.name,
-				to: recipient,
-				subject: `Agent ${agent.name} died (zombie detected)`,
-				body: `Process (PID ${agent.pid ?? "none"}) is no longer alive but DB still showed running. Auto-marked as failed. Capability: ${agent.capability}, task: ${agent.taskId}.`,
-				type: "error",
-			});
-
-			updateTask(agent.taskId, { status: "failed" });
-			zombies.push(agent.name);
-
-			// Auto-retry the zombie's task (fire-and-forget)
-			const task = getTask(agent.taskId);
-			if (task) {
-				maybeRetryAgent({
-					taskId: agent.taskId,
-					name: agent.name,
-					capability: agent.capability as AgentCapability,
-					baseBranch: "main",
-					taskDescription: task.description,
-					parentName: agent.parentName,
-					depth: agent.depth,
-				}).catch(() => {
-					// Retry errors are already handled inside maybeRetryAgent
+				emit("agent.completed", `Agent "${agent.name}" reconciled as completed (completion mail found, PID ${agent.pid ?? "none"} exited)`, {
+					agent: agent.name,
 				});
+
+				updateTask(agent.taskId, { status: "completed" });
+			} else {
+				db.prepare(
+					"UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?",
+				).run(agent.name);
+
+				emit("agent.failed", `Agent "${agent.name}" detected as zombie (PID ${agent.pid ?? "none"} not alive)`, {
+					agent: agent.name,
+				});
+
+				const recipient = agent.parentName ?? "orchestrator";
+				sendMail({
+					from: agent.name,
+					to: recipient,
+					subject: `Agent ${agent.name} died (zombie detected)`,
+					body: `Process (PID ${agent.pid ?? "none"}) is no longer alive but DB still showed running. Auto-marked as failed. Capability: ${agent.capability}, task: ${agent.taskId}.`,
+					type: "error",
+				});
+
+				updateTask(agent.taskId, { status: "failed" });
+
+				// Auto-retry only genuinely failed agents (no completion mail)
+				const task = getTask(agent.taskId);
+				if (task) {
+					maybeRetryAgent({
+						taskId: agent.taskId,
+						name: agent.name,
+						capability: agent.capability as AgentCapability,
+						baseBranch: "main",
+						taskDescription: task.description,
+						parentName: agent.parentName,
+						depth: agent.depth,
+					}).catch(() => {
+						// Retry errors are already handled inside maybeRetryAgent
+					});
+				}
 			}
+
+			zombies.push(agent.name);
 		}
 	}
 
