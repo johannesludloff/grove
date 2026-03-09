@@ -205,6 +205,33 @@ const MAX_RETRIES = 2;
 /** Default maximum spawn depth (orchestrator=0 → lead=1 → worker=2) */
 const MAX_SPAWN_DEPTH = 2;
 
+/** Default maximum active sub-agents per lead (0 = unlimited) */
+const MAX_AGENTS_PER_LEAD = 5;
+
+/**
+ * Check if a parent agent has reached its sub-agent limit.
+ * Counts children with status IN ('running', 'spawning').
+ * Throws if the limit is reached.
+ */
+export function checkParentAgentLimit(parentName: string, maxAgents?: number): void {
+	const limit = maxAgents ?? MAX_AGENTS_PER_LEAD;
+	if (limit === 0) return; // unlimited
+
+	const db = getDb();
+	const row = db
+		.prepare(
+			"SELECT COUNT(*) as count FROM agents WHERE parent_name = ? AND status IN ('running', 'spawning')",
+		)
+		.get(parentName) as { count: number };
+
+	if (row.count >= limit) {
+		throw new Error(
+			`Parent agent "${parentName}" has reached its sub-agent limit (${row.count}/${limit} active). ` +
+			`Wait for existing sub-agents to complete before spawning more, or increase the limit with --max-agents.`,
+		);
+	}
+}
+
 /** Spawn a new Claude Code agent in a worktree */
 export async function spawnAgent(opts: {
 	name: string;
@@ -216,6 +243,7 @@ export async function spawnAgent(opts: {
 	parentName?: string;
 	depth?: number;
 	maxDepth?: number;
+	maxAgents?: number;
 }): Promise<SpawnResult> {
 	const db = getDb();
 
@@ -225,6 +253,11 @@ export async function spawnAgent(opts: {
 		.get(opts.name);
 	if (existing) {
 		throw new Error(`Agent "${opts.name}" is already active`);
+	}
+
+	// Enforce per-lead sub-agent budget
+	if (opts.parentName) {
+		checkParentAgentLimit(opts.parentName, opts.maxAgents);
 	}
 
 	// Compute depth: if explicit depth provided use it, else derive from parent

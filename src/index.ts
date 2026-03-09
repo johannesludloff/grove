@@ -221,10 +221,11 @@ program
 	.option("--parent <name>", "Parent agent name")
 	.option("--depth <n>", "Explicit spawn depth (auto-derived from parent if omitted)")
 	.option("--max-depth <n>", "Maximum spawn depth (default: 2)")
+	.option("--max-agents <n>", "Maximum active sub-agents per lead (default: 5, 0=unlimited)")
 	.action(
 		async (
 			taskId: string,
-			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string },
+			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string; maxAgents?: string },
 		) => {
 			const task = getTask(taskId);
 			if (!task) {
@@ -244,6 +245,7 @@ program
 				parentName: opts.parent,
 				depth: opts.depth ? Number(opts.depth) : undefined,
 				maxDepth: opts.maxDepth ? Number(opts.maxDepth) : undefined,
+				maxAgents: opts.maxAgents ? Number(opts.maxAgents) : undefined,
 			});
 
 			console.log(`Spawned agent: ${result.agent.name} (PID ${result.pid})`);
