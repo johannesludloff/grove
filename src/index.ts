@@ -19,6 +19,7 @@ import { resolve } from "./merge-resolver.ts";
 import { prime } from "./prime.ts";
 import { installHooks, uninstallHooks, statusHooks } from "./hooks.ts";
 import { collectBenchmarks, storeBenchmarkRun, getPreviousRun, displayReport, listRuns } from "./benchmark.ts";
+import { startWatchdog, stopWatchdog, isWatchdogRunning } from "./watchdog.ts";
 import type { AgentCapability, MailType, TaskStatus, MergeTier } from "./types.ts";
 import type { MemoryType } from "./memory.ts";
 
@@ -247,6 +248,11 @@ program
 				maxDepth: opts.maxDepth ? Number(opts.maxDepth) : undefined,
 				maxAgents: opts.maxAgents ? Number(opts.maxAgents) : undefined,
 			});
+
+			// Start watchdog on first spawn if not already running
+			if (!isWatchdogRunning()) {
+				startWatchdog();
+			}
 
 			console.log(`Spawned agent: ${result.agent.name} (PID ${result.pid})`);
 			console.log(`  Capability: ${result.agent.capability}`);
@@ -879,6 +885,13 @@ program
 			}
 
 			console.log(`Cleaned ${cleaned} agent worktree(s).`);
+
+			// Stop watchdog if no running agents remain
+			const remaining = listAgents("running");
+			if (remaining.length === 0 && isWatchdogRunning()) {
+				stopWatchdog();
+				console.log("Watchdog stopped — no running agents remain.");
+			}
 		}
 	});
 
