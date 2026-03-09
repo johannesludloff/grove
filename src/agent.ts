@@ -336,6 +336,8 @@ export async function spawnAgent(opts: {
 			memoryBlock,
 			siblingBlock,
 			priorWorkBlock,
+			opts.parentName,
+			depth,
 		);
 
 		// Write log dir marker and prompt file in parallel
@@ -575,6 +577,57 @@ function checkDuplicateLead(taskId: string): void {
 	}
 }
 
+/** Hierarchy rules per capability: what each role can and cannot spawn */
+const HIERARCHY_RULES: Record<AgentCapability, { canSpawn: string[]; cannotSpawn: string[] }> = {
+	lead: {
+		canSpawn: ["builder", "scout", "reviewer"],
+		cannotSpawn: ["lead (only the orchestrator spawns leads)"],
+	},
+	builder: {
+		canSpawn: [],
+		cannotSpawn: ["any agents (builders implement, they do not delegate)"],
+	},
+	scout: {
+		canSpawn: [],
+		cannotSpawn: ["any agents (scouts observe, they do not delegate)"],
+	},
+	reviewer: {
+		canSpawn: [],
+		cannotSpawn: ["any agents (reviewers assess, they do not delegate)"],
+	},
+};
+
+/** Startup checklist per capability */
+const STARTUP_CHECKLISTS: Record<AgentCapability, string[]> = {
+	scout: [
+		"Read and understand the task description",
+		"Explore the relevant codebase areas",
+		"Gather file paths, interfaces, and patterns",
+		"Report findings to parent via completion",
+	],
+	builder: [
+		"Read and understand the task description",
+		"Read the spec file if one exists at `.grove/specs/<task-id>.md`",
+		"Read prior work context (if any) to avoid rework",
+		"Implement the required changes",
+		"Run typecheck: `bun run typecheck` (if applicable)",
+		"Commit all changes with a descriptive message",
+	],
+	lead: [
+		"Read and understand the task description",
+		"Assess complexity tier (Simple / Moderate / Complex)",
+		"Plan decomposition — identify sub-tasks and file scope",
+		"Spawn sub-agents (scouts first if code is unread, then builders)",
+		"Monitor, verify, and report completion",
+	],
+	reviewer: [
+		"Read and understand the task description",
+		"Read all changed files on the branch under review",
+		"Verify correctness, completeness, and code quality",
+		"Report verdict: PASS or FAIL with details",
+	],
+};
+
 /** Build the full prompt for an agent */
 function buildPrompt(
 	capability: AgentCapability,
@@ -583,17 +636,45 @@ function buildPrompt(
 	memoryBlock: string,
 	siblingBlock: string,
 	priorWorkBlock: string,
+	parentName?: string,
+	depth?: number,
 ): string {
 	const systemPart = SYSTEM_PROMPTS[capability];
 	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
 	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
 	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
 
+	// Build the structured startup beacon
+	const timestamp = new Date().toISOString();
+	const agentDepth = depth ?? 0;
+	const rules = HIERARCHY_RULES[capability];
+	const checklist = STARTUP_CHECKLISTS[capability];
+
+	const canSpawnLine = rules.canSpawn.length > 0
+		? `- **Can spawn**: ${rules.canSpawn.join(", ")}`
+		: "- **Can spawn**: nothing";
+	const cannotSpawnLine = `- **Cannot spawn**: ${rules.cannotSpawn.join(", ")}`;
+
+	const checklistLines = checklist
+		.map((item, i) => `${i + 1}. ${item}`)
+		.join("\n");
+
+	const beacon = `## Startup Beacon
+- **Timestamp**: ${timestamp}
+- **Agent**: ${agentName} (${capability})
+- **Depth**: ${agentDepth} (orchestrator=0 → lead=1 → worker=2)
+- **Parent**: ${parentName ?? "orchestrator (top-level)"}
+
+## Hierarchy Rules
+${canSpawnLine}
+${cannotSpawnLine}
+
+## Startup Checklist
+${checklistLines}`;
+
 	return `${systemPart}
 
-## Your Identity
-- Agent name: ${agentName}
-- Role: ${capability}
+${beacon}
 ${memorySection}${siblingSection}${priorWorkSection}
 ## Your Task
 ${taskDescription}
