@@ -36,7 +36,7 @@ async function getConflictFiles(cwd: string): Promise<string[]> {
 }
 
 /** Parse conflict markers and return content keeping the incoming (agent/theirs) side */
-function resolveConflictMarkers(content: string): string {
+export function resolveConflictMarkers(content: string): string {
 	const lines = content.split("\n");
 	const result: string[] = [];
 	type State = "normal" | "ours" | "theirs";
