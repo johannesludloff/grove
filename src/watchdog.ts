@@ -7,8 +7,11 @@ import { emit } from "./events.ts";
 /** Watchdog check interval in ms (30 seconds) */
 const CHECK_INTERVAL_MS = 30_000;
 
-/** Number of consecutive stall checks before warning (2 checks = ~1 minute) */
-const STALL_THRESHOLD = 2;
+/** Number of consecutive stall checks before warning (4 checks = ~2 minutes) */
+const STALL_THRESHOLD = 4;
+
+/** Minimum agent age in ms before stall warnings apply (3 minutes) */
+const MIN_AGE_FOR_STALL_MS = 3 * 60_000;
 
 /** Summary interval in ms (5 minutes) */
 const SUMMARY_INTERVAL_MS = 5 * 60_000;
@@ -119,21 +122,26 @@ function runHealthCheck(): void {
 		}
 	}
 
-	// 4. Send stall warnings
-	if (stalled.length > 0) {
+	// 4. Send stall warnings (only for agents running at least 3 minutes)
+	const now = Date.now();
+	const matureStalled = stalled.filter((name) => {
+		const agent = running.find((a) => a.name === name);
+		if (!agent?.createdAt) return true; // fallback: include if no timestamp
+		return now - new Date(agent.createdAt).getTime() >= MIN_AGE_FOR_STALL_MS;
+	});
+	if (matureStalled.length > 0) {
 		sendMail({
 			from: "watchdog",
 			to: "orchestrator",
-			subject: `Stalled agents: ${stalled.join(", ")}`,
-			body: `Watchdog detected ${stalled.length} agent(s) with no output growth for ${STALL_THRESHOLD} consecutive checks (~${(STALL_THRESHOLD * CHECK_INTERVAL_MS) / 1000}s): ${stalled.join(", ")}. These agents may be stuck.`,
+			subject: `Stalled agents: ${matureStalled.join(", ")}`,
+			body: `Watchdog detected ${matureStalled.length} agent(s) with no output growth for ${STALL_THRESHOLD} consecutive checks (~${(STALL_THRESHOLD * CHECK_INTERVAL_MS) / 1000}s): ${matureStalled.join(", ")}. These agents may be stuck.`,
 			type: "status",
 		});
 	}
 
-	// 5. Periodic health summary every 5 minutes
-	const now = Date.now();
-	if (now - lastSummaryAt >= SUMMARY_INTERVAL_MS) {
-		sendHealthSummary(running.length, stalled.length);
+	// 5. Periodic health summary every 5 minutes (skip when no agents running)
+	if (running.length > 0 && now - lastSummaryAt >= SUMMARY_INTERVAL_MS) {
+		sendHealthSummary(running.length, matureStalled.length);
 		lastSummaryAt = now;
 	}
 
