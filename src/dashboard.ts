@@ -11,7 +11,10 @@
  *   Mail + Memory compact strip
  */
 
+import { existsSync, statSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { listAgents } from "./agent.ts";
+import { getDb, groveDir } from "./db.ts";
 import { recentEvents, type EventType, type GroveEvent } from "./events.ts";
 import { listMail } from "./mail.ts";
 import { listMemories } from "./memory.ts";
@@ -239,6 +242,78 @@ function colorByStatus(name: string, status: AgentStatus): string {
 	}
 }
 
+const MAX_AGENTS_PER_LEAD = 5;
+
+/** Count children per parent agent name */
+function getSubAgentCounts(agents: Agent[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const a of agents) {
+		if (a.parentName) {
+			counts.set(a.parentName, (counts.get(a.parentName) ?? 0) + 1);
+		}
+	}
+	return counts;
+}
+
+/** Parse file count from agent completion mail body ("Files changed:\n..." section) */
+function getFileCountsFromMail(): Map<string, number> {
+	const counts = new Map<string, number>();
+	try {
+		const db = getDb();
+		const rows = db
+			.prepare(
+				"SELECT from_agent, body FROM mail WHERE type IN ('done', 'result') AND body LIKE '%Files changed:%'",
+			)
+			.all() as Array<{ from_agent: string; body: string }>;
+		for (const row of rows) {
+			const match = row.body.match(/Files changed:\n([\s\S]*?)(?:\n\n|\nOutput |$)/);
+			if (match) {
+				const fileLines = match[1]!.trim().split("\n").filter((l) => l.trim());
+				counts.set(row.from_agent, fileLines.length);
+			}
+		}
+	} catch {
+		// DB may not be ready
+	}
+	return counts;
+}
+
+/** Get file count from git diff for a branch (returns undefined if unavailable) */
+function getFileCountFromGit(branch: string): number | undefined {
+	try {
+		const output = execSync(`git diff --name-only main...${branch}`, {
+			encoding: "utf8",
+			timeout: 2000,
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
+		if (!output) return 0;
+		return output.split("\n").length;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Format byte size compactly: 1.2kb, 340b, 5.1mb */
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes}b`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}kb`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)}mb`;
+}
+
+/** Get stdout file size for a running agent */
+function getStdoutSize(agentName: string): string | undefined {
+	try {
+		const logPath = `${groveDir()}/logs/${agentName}/stdout.txt`;
+		if (existsSync(logPath)) {
+			const size = statSync(logPath).size;
+			return formatSize(size);
+		}
+	} catch {
+		// Log may not exist
+	}
+	return undefined;
+}
+
 function renderAgents(agents: Agent[], width: number, maxRows: number, startRow: number): { output: string; rowsUsed: number } {
 	let output = "";
 	const indent = " ".repeat(PAD_LEFT);
@@ -255,9 +330,24 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		return { output, rowsUsed: 2 };
 	}
 
+	// Build file counts: prefer git diff for active branches, fall back to mail body
+	const mailFileCounts = getFileCountsFromMail();
+	const fileCounts = new Map<string, number>();
+	for (const a of visibleAgents) {
+		if (mailFileCounts.has(a.name)) {
+			fileCounts.set(a.name, mailFileCounts.get(a.name)!);
+		} else if (a.status === "running" || a.status === "spawning" || a.status === "completed") {
+			const gitCount = getFileCountFromGit(a.branch);
+			if (gitCount !== undefined) fileCounts.set(a.name, gitCount);
+		}
+	}
+
+	// Build sub-agent counts (all agents, not just visible)
+	const subCounts = getSubAgentCounts(agents);
+
 	// Column headers
 	output += writeLine(startRow + 1, 1,
-		`${indent}${c.dim(pad("", 3))}${c.dim(pad("Name", 22))} ${c.dim(pad("Cap", 10))} ${c.dim(pad("State", 12))} ${c.dim(pad("Task", 18))} ${c.dim("Time")}`,
+		`${indent}${c.dim(pad("", 3))}${c.dim(pad("Name", 22))} ${c.dim(pad("Cap", 10))} ${c.dim(pad("State", 12))} ${c.dim(pad("Task", 18))} ${c.dim(pad("Files", 5))} ${c.dim(pad("Sub", 5))} ${c.dim("Time")}`,
 		width,
 	);
 
@@ -323,7 +413,30 @@ function renderAgents(agents: Agent[], width: number, maxRows: number, startRow:
 		const staleIcon = isStalled ? c.yellow("\u26a0") : " ";
 
 		const taskId = c.dim(pad(truncate(a.taskId, 18), 18));
-		output += writeLine(startRow + 2 + i, 1, `${indent}${icon}  ${styledName} ${cap} ${state} ${taskId} ${dur} ${staleIcon}`, width);
+
+		// Files column
+		const fileCount = fileCounts.get(a.name);
+		const filesCol = fileCount !== undefined ? pad(String(fileCount), 5) : pad("-", 5);
+
+		// Sub column: show used/max for leads, '-' for others
+		let subCol: string;
+		if (a.capability === "lead") {
+			const used = subCounts.get(a.name) ?? 0;
+			subCol = pad(`${used}/${MAX_AGENTS_PER_LEAD}`, 5);
+		} else {
+			subCol = pad("-", 5);
+		}
+
+		// For running agents, append stdout size after duration
+		let timeStr = dur;
+		if (isActive) {
+			const stdoutSz = getStdoutSize(a.name);
+			if (stdoutSz) {
+				timeStr = `${dur} ${c.dim(stdoutSz)}`;
+			}
+		}
+
+		output += writeLine(startRow + 2 + i, 1, `${indent}${icon}  ${styledName} ${cap} ${state} ${taskId} ${filesCol} ${subCol} ${timeStr} ${staleIcon}`, width);
 	}
 
 	let rowsUsed = 2 + visible.length;
