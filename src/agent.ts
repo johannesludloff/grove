@@ -365,7 +365,7 @@ export async function spawnAgent(opts: {
 			stdout: Bun.file(`${logDir}/stdout.txt`),
 			stderr: Bun.file(`${logDir}/stderr.log`),
 			stdin: Bun.file(promptFile),
-			env: { ...process.env, PATH: process.env.PATH, CLAUDECODE: "" },
+			env: { ...process.env, PATH: process.env.PATH, CLAUDECODE: "", GROVE_AGENT: "1" },
 		});
 
 		pid = proc.pid;
