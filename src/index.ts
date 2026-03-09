@@ -1086,6 +1086,49 @@ program
 		}
 	});
 
+// ── grove check-complete ─────────────────────────────────────────────────
+program
+	.command("check-complete")
+	.description("Check if all orchestrator work is done (agents, tasks, merges)")
+	.action(() => {
+		// Reconcile zombies first so status is accurate
+		reconcileZombies();
+
+		const activeAgents = [
+			...listAgents("running"),
+			...listAgents("spawning"),
+		];
+		const allAgentsDone = activeAgents.length === 0;
+
+		const pendingTasks = listTasks("pending");
+		const inProgressTasks = listTasks("in_progress");
+		const tasksEmpty = pendingTasks.length === 0 && inProgressTasks.length === 0;
+
+		const pendingMerges = listMergeQueue("pending");
+		const mergingEntries = listMergeQueue("merging");
+		const mergeQueueEmpty = pendingMerges.length === 0 && mergingEntries.length === 0;
+
+		const complete = allAgentsDone && tasksEmpty && mergeQueueEmpty;
+
+		const result = {
+			complete,
+			triggers: {
+				allAgentsDone,
+				tasksEmpty,
+				mergeQueueEmpty,
+			},
+			details: {
+				activeAgents: activeAgents.map((a) => ({ name: a.name, status: a.status, capability: a.capability })),
+				pendingTasks: pendingTasks.map((t) => ({ taskId: t.taskId, status: t.status })),
+				inProgressTasks: inProgressTasks.map((t) => ({ taskId: t.taskId, status: t.status, assignedTo: t.assignedTo })),
+				pendingMerges: pendingMerges.map((e) => ({ branch: e.branchName, agent: e.agentName })),
+				mergingEntries: mergingEntries.map((e) => ({ branch: e.branchName, agent: e.agentName })),
+			},
+		};
+
+		console.log(JSON.stringify(result, null, 2));
+	});
+
 // ── grove guard (PreToolUse hook target) ────────────────────────────────
 program
 	.command("guard")
