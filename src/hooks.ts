@@ -21,6 +21,7 @@ interface HooksConfig {
 	SessionStart?: HookGroup[];
 	UserPromptSubmit?: HookGroup[];
 	PreToolUse?: HookGroup[];
+	PostToolUse?: HookGroup[];
 	[key: string]: HookGroup[] | undefined;
 }
 
@@ -69,6 +70,16 @@ export function buildHooksJson(): HooksConfig {
 					{
 						type: "command",
 						command: "grove guard --warn-read",
+					},
+				],
+			},
+		],
+		PostToolUse: [
+			{
+				hooks: [
+					{
+						type: "command",
+						command: "grove tool-metric",
 					},
 				],
 			},

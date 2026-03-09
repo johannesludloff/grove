@@ -108,8 +108,17 @@ function ensureTables(db: Database): void {
 			resolved_tier TEXT CHECK(resolved_tier IS NULL OR resolved_tier IN ('clean-merge','auto-resolve'))
 		);
 
+		CREATE TABLE IF NOT EXISTS tool_metrics (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_name TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			success INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_merge_queue_status ON merge_queue(status);
 		CREATE INDEX IF NOT EXISTS idx_merge_queue_branch_name ON merge_queue(branch_name);
+		CREATE INDEX IF NOT EXISTS idx_tool_metrics_agent ON tool_metrics(agent_name);
 	`);
 
 	// Migrate: add last_activity_at column if it doesn't exist yet

@@ -80,3 +80,12 @@ export interface SpawnResult {
 	agent: Agent;
 	pid: number;
 }
+
+/** Tool usage metric from PostToolUse hook */
+export interface ToolMetric {
+	id: number;
+	agentName: string;
+	toolName: string;
+	success: boolean;
+	createdAt: string;
+}
