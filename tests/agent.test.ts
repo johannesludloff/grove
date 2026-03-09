@@ -335,17 +335,15 @@ describe("agent", () => {
 		});
 
 		test("allows orchestrator (no parent) to spawn any capability", async () => {
-			// This should pass hierarchy check — will fail later at Bun.spawn
-			// but the hierarchy check itself should not throw
-			await expect(
-				spawnAgent({
-					name: "top-level-lead",
-					capability: "lead",
-					taskId: "t-hier-5",
-					taskDescription: "Lead task",
-					baseBranch: "main",
-				}),
-			).rejects.not.toThrow(HierarchyError);
+			// Orchestrator (no parentName) passes hierarchy check and spawns successfully
+			const result = await spawnAgent({
+				name: "top-level-lead",
+				capability: "lead",
+				taskId: "t-hier-5",
+				taskDescription: "Lead task",
+				baseBranch: "main",
+			});
+			expect(result).toBeDefined();
 		});
 	});
 
