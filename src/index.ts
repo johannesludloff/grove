@@ -259,6 +259,12 @@ program
 			console.log(`  Branch: ${result.agent.branch}`);
 			console.log(`  Depth: ${result.agent.depth}`);
 			console.log(`  Worktree: ${result.agent.worktree}`);
+
+			// Exit immediately — the agent subprocess runs independently.
+			// Agent lifecycle is monitored by the SessionEnd hook and watchdog,
+			// not by this CLI process. Without this, the activity poller setInterval
+			// and proc.exited promise in spawnAgent() keep the event loop alive.
+			process.exit(0);
 		},
 	);
 
