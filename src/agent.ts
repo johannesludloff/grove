@@ -7,7 +7,7 @@ import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
 import { getTask, incrementRetryCount, updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
-import { resolveModel } from "./models.ts";
+import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
 
 /** Common English stopwords for keyword extraction */
@@ -193,7 +193,7 @@ const ALLOWED_TOOLS: Record<AgentCapability, string> = {
 
 /** Inactivity timeout in ms per capability — agent is killed if no stdout for this long */
 const CAPABILITY_TIMEOUTS: Record<AgentCapability, number> = {
-	scout: 3 * 60_000,      // 3 minutes
+	scout: 8 * 60_000,      // 8 minutes
 	builder: 10 * 60_000,   // 10 minutes
 	reviewer: 5 * 60_000,   // 5 minutes
 	lead: 15 * 60_000,      // 15 minutes
@@ -295,11 +295,14 @@ export async function spawnAgent(opts: {
 	]);
 
 	const model = resolveModel(opts.capability, opts.model);
+	const effort = resolveEffort(opts.capability);
 	const args = [
 		"claude",
 		"-p",
 		"--model",
 		model,
+		"--effort",
+		effort,
 		"--allowedTools",
 		ALLOWED_TOOLS[opts.capability] ?? "",
 		"--dangerously-skip-permissions",
