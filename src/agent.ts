@@ -208,6 +208,48 @@ const MAX_SPAWN_DEPTH = 2;
 /** Default maximum active sub-agents per lead (0 = unlimited) */
 const MAX_AGENTS_PER_LEAD = 5;
 
+/** Capabilities that leads are allowed to spawn */
+const LEAD_SPAWNABLE: ReadonlySet<AgentCapability> = new Set(["builder", "scout", "reviewer"]);
+
+/** Error thrown when agent hierarchy rules are violated */
+export class HierarchyError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "HierarchyError";
+	}
+}
+
+/**
+ * Enforce agent hierarchy rules before spawning.
+ * - Orchestrator (no parent) can spawn any capability.
+ * - Leads can spawn builders, scouts, and reviewers — but NOT other leads.
+ * - Builders, scouts, and reviewers cannot spawn any agents.
+ */
+function checkHierarchy(parentName: string | undefined, capability: AgentCapability): void {
+	if (!parentName) return; // orchestrator can spawn anything
+
+	const db = getDb();
+	const parent = db
+		.prepare("SELECT capability FROM agents WHERE name = ?")
+		.get(parentName) as { capability: AgentCapability } | null;
+
+	if (!parent) return; // parent not found in DB — let depth check handle it
+
+	if (parent.capability !== "lead") {
+		throw new HierarchyError(
+			`Agent "${parentName}" (${parent.capability}) cannot spawn sub-agents. ` +
+			`Only leads and the orchestrator can spawn agents.`,
+		);
+	}
+
+	if (!LEAD_SPAWNABLE.has(capability)) {
+		throw new HierarchyError(
+			`Lead "${parentName}" cannot spawn a ${capability}. ` +
+			`Leads can only spawn: ${[...LEAD_SPAWNABLE].join(", ")}.`,
+		);
+	}
+}
+
 /**
  * Check if a parent agent has reached its sub-agent limit.
  * Counts children with status IN ('running', 'spawning').
@@ -259,6 +301,9 @@ export async function spawnAgent(opts: {
 	if (opts.parentName) {
 		checkParentAgentLimit(opts.parentName, opts.maxAgents);
 	}
+
+	// Enforce hierarchy: only leads/orchestrator can spawn, leads cannot spawn leads
+	checkHierarchy(opts.parentName, opts.capability);
 
 	// Compute depth: if explicit depth provided use it, else derive from parent
 	let depth = opts.depth ?? 0;

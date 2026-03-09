@@ -31,6 +31,7 @@ const {
 	spawnAgent,
 	stopAgent,
 	cleanAgent,
+	HierarchyError,
 } = await import("../src/agent.ts");
 
 /** Insert an agent directly into the test DB */
@@ -213,6 +214,7 @@ describe("agent", () => {
 		test("rejects spawn depth exceeding default maximum (2)", async () => {
 			insertAgent({
 				name: "deep-parent",
+				capability: "lead",
 				depth: 2,
 				status: "running",
 			});
@@ -232,6 +234,7 @@ describe("agent", () => {
 		test("rejects spawn depth exceeding custom maximum", async () => {
 			insertAgent({
 				name: "shallow-parent",
+				capability: "lead",
 				depth: 1,
 				status: "running",
 			});
@@ -247,6 +250,102 @@ describe("agent", () => {
 					maxDepth: 1,
 				}),
 			).rejects.toThrow("Spawn depth 2 exceeds maximum 1");
+		});
+	});
+
+	describe("spawnAgent — hierarchy enforcement", () => {
+		test("blocks builder from spawning sub-agents", async () => {
+			insertAgent({
+				name: "parent-builder",
+				capability: "builder",
+				status: "running",
+				taskId: "t-hier-1",
+			});
+
+			await expect(
+				spawnAgent({
+					name: "child-scout",
+					capability: "scout",
+					taskId: "t-hier-1b",
+					taskDescription: "Scout task",
+					baseBranch: "main",
+					parentName: "parent-builder",
+				}),
+			).rejects.toThrow(HierarchyError);
+		});
+
+		test("blocks scout from spawning sub-agents", async () => {
+			insertAgent({
+				name: "parent-scout",
+				capability: "scout",
+				status: "running",
+				taskId: "t-hier-2",
+			});
+
+			await expect(
+				spawnAgent({
+					name: "child-builder",
+					capability: "builder",
+					taskId: "t-hier-2b",
+					taskDescription: "Build task",
+					baseBranch: "main",
+					parentName: "parent-scout",
+				}),
+			).rejects.toThrow("cannot spawn sub-agents");
+		});
+
+		test("blocks reviewer from spawning sub-agents", async () => {
+			insertAgent({
+				name: "parent-reviewer",
+				capability: "reviewer",
+				status: "running",
+				taskId: "t-hier-3",
+			});
+
+			await expect(
+				spawnAgent({
+					name: "child-builder",
+					capability: "builder",
+					taskId: "t-hier-3b",
+					taskDescription: "Build task",
+					baseBranch: "main",
+					parentName: "parent-reviewer",
+				}),
+			).rejects.toThrow("cannot spawn sub-agents");
+		});
+
+		test("blocks lead from spawning another lead", async () => {
+			insertAgent({
+				name: "parent-lead",
+				capability: "lead",
+				status: "running",
+				taskId: "t-hier-4",
+			});
+
+			await expect(
+				spawnAgent({
+					name: "child-lead",
+					capability: "lead",
+					taskId: "t-hier-4b",
+					taskDescription: "Lead task",
+					baseBranch: "main",
+					parentName: "parent-lead",
+				}),
+			).rejects.toThrow("cannot spawn a lead");
+		});
+
+		test("allows orchestrator (no parent) to spawn any capability", async () => {
+			// This should pass hierarchy check — will fail later at Bun.spawn
+			// but the hierarchy check itself should not throw
+			await expect(
+				spawnAgent({
+					name: "top-level-lead",
+					capability: "lead",
+					taskId: "t-hier-5",
+					taskDescription: "Lead task",
+					baseBranch: "main",
+				}),
+			).rejects.not.toThrow(HierarchyError);
 		});
 	});
 
