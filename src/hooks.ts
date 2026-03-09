@@ -32,6 +32,9 @@ interface ClaudeSettings {
 	[key: string]: unknown;
 }
 
+/** Env-guard prefix: skip grove hooks silently when not running inside a grove agent */
+const ENV_GUARD = '[ -z "$GROVE_AGENT" ] && exit 0; ';
+
 /** Returns the hooks config object for grove integration */
 export function buildHooksJson(): HooksConfig {
 	return {
@@ -40,7 +43,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove prime",
+						command: `${ENV_GUARD}grove prime`,
 					},
 				],
 			},
@@ -50,7 +53,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove mail check orchestrator",
+						command: `${ENV_GUARD}grove mail check orchestrator`,
 					},
 				],
 			},
@@ -61,7 +64,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove guard",
+						command: `${ENV_GUARD}grove guard`,
 					},
 				],
 			},
@@ -70,7 +73,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove guard --warn-read",
+						command: `${ENV_GUARD}grove guard --warn-read`,
 					},
 				],
 			},
@@ -80,7 +83,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove tool-metric",
+						command: `${ENV_GUARD}grove tool-metric`,
 					},
 				],
 			},
@@ -90,7 +93,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove mail deliver",
+						command: `${ENV_GUARD}grove mail deliver`,
 					},
 				],
 			},
@@ -100,7 +103,7 @@ export function buildHooksJson(): HooksConfig {
 				hooks: [
 					{
 						type: "command",
-						command: "grove session-end",
+						command: `${ENV_GUARD}grove session-end`,
 					},
 				],
 			},
