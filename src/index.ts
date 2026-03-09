@@ -2,11 +2,12 @@
 /** Grove — Windows-native multi-agent orchestrator for Claude Code */
 
 import { Command } from "commander";
-import { closeDb, groveDir, initDb } from "./db.ts";
+import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
-import { createTask, getTask, listTasks } from "./tasks.ts";
-import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies } from "./agent.ts";
+import { createTask, getTask, listTasks, updateTask } from "./tasks.ts";
+import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
+import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
 import { addMemory, listMemories, removeMemory } from "./memory.ts";
 import { DEFAULT_POWER_MODEL, DEFAULT_FAST_MODEL } from "./models.ts";
@@ -910,6 +911,88 @@ program
 			`  grove spawn <task-id> -n <name> -c lead\n`,
 		);
 		process.exit(2);
+	});
+
+// ── grove session-end (SessionEnd hook target) ─────────────────────────
+program
+	.command("session-end")
+	.description("SessionEnd hook: update agent status when a Claude session exits")
+	.action(async () => {
+		// Read stdin JSON from the SessionEnd hook
+		const input = await new Response(Bun.stdin.stream()).text();
+		let data: { session_id?: string; cwd?: string; transcript_path?: string } = {};
+		try {
+			data = JSON.parse(input) as typeof data;
+		} catch {
+			// Malformed input — exit silently
+			process.exit(0);
+		}
+
+		const cwd = data.cwd;
+		if (!cwd) {
+			process.exit(0);
+		}
+
+		// Map cwd (worktree path) to an agent
+		const agent = getAgentByWorktree(cwd);
+		if (!agent) {
+			// Not a grove agent session — ignore
+			process.exit(0);
+		}
+
+		// Only act on agents still marked as running/spawning
+		if (agent.status !== "running" && agent.status !== "spawning") {
+			process.exit(0);
+		}
+
+		// Give a brief moment for the process to fully exit
+		await Bun.sleep(500);
+
+		const db = getDb();
+		const pid = agent.pid;
+
+		// Determine status: if PID is still alive, the session may have restarted — don't interfere
+		if (pid != null && isPidAlive(pid)) {
+			process.exit(0);
+		}
+
+		// PID is dead and session ended → mark based on whether the agent sent completion mail
+		// Check if the agent already sent a "done" mail (meaning it completed normally)
+		const doneMail = db
+			.prepare(
+				"SELECT id FROM mail WHERE from_agent = ? AND type = 'done' LIMIT 1",
+			)
+			.get(agent.name) as { id: number } | null;
+
+		const status = doneMail ? "completed" : "failed";
+
+		db.prepare(
+			"UPDATE agents SET status = ?, updated_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')",
+		).run(status, agent.name);
+
+		emit(
+			status === "completed" ? "agent.completed" : "agent.failed",
+			`Agent "${agent.name}" session ended (${status})`,
+			{ agent: agent.name },
+		);
+
+		// Only send mail if the agent didn't already report completion
+		if (!doneMail) {
+			const recipient = agent.parentName ?? "orchestrator";
+			sendMail({
+				from: agent.name,
+				to: recipient,
+				subject: `Agent ${agent.name} session ended (${status})`,
+				body: `Session ended for agent "${agent.name}" (PID ${pid ?? "none"}). ` +
+					`Detected via SessionEnd hook. Status set to ${status}. ` +
+					`Capability: ${agent.capability}, task: ${agent.taskId}.`,
+				type: status === "completed" ? "done" : "error",
+			});
+
+			updateTask(agent.taskId, { status });
+		}
+
+		process.exit(0);
 	});
 
 // ── Run ─────────────────────────────────────────────────────────────────

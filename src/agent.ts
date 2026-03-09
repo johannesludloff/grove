@@ -773,6 +773,22 @@ async function buildCompletionMailBody(
 	return parts.join("\n");
 }
 
+/** Get an agent by its worktree path */
+export function getAgentByWorktree(worktreePath: string): Agent | null {
+	const db = getDb();
+	// Normalize path separators for cross-platform matching
+	const normalized = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
+	return db
+		.prepare(
+			`SELECT id, name, capability, status, pid, worktree, branch,
+			        task_id as taskId, parent_name as parentName, depth,
+			        created_at as createdAt, updated_at as updatedAt,
+			        last_activity_at as lastActivityAt
+		   FROM agents WHERE REPLACE(worktree, '\\', '/') = ?`,
+		)
+		.get(normalized) as Agent | null;
+}
+
 /** Get an agent by name */
 export function getAgent(name: string): Agent | null {
 	const db = getDb();
