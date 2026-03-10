@@ -966,6 +966,12 @@ cronCmd
 			command: "grove clean",
 			description: "Grove: auto-clean finished worktrees",
 		}, null, 2));
+		console.log("\n3. CronCreate — reactive mail check:");
+		console.log(JSON.stringify({
+			schedule: "every 2 minutes",
+			command: "grove mail check orchestrator",
+			description: "Grove: reactive mail check",
+		}, null, 2));
 		console.log("\nThe orchestrator's SessionStart hook should call these automatically.");
 	});
 

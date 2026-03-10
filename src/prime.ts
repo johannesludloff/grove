@@ -50,6 +50,8 @@ export function prime(): void {
 	out.write("   CronCreate with schedule `every 5 minutes`, command `grove status > /dev/null`\n\n");
 	out.write("2. **Auto-clean worktrees** — every 10 minutes:\n");
 	out.write("   CronCreate with schedule `every 10 minutes`, command `grove clean`\n\n");
+	out.write("3. **Reactive mail check** — every 2 minutes:\n");
+	out.write("   CronCreate with schedule `every 2 minutes`, command `grove mail check orchestrator`\n\n");
 	out.write("Use `grove cron list` to check active crons, `grove cron clear` to remove them.\n\n");
 
 	// Active state
