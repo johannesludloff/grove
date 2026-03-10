@@ -179,6 +179,7 @@ function shortEventType(type: EventType): string {
 		"task.assigned": "asgn",
 		"task.completed": "done",
 		"task.failed": "fail",
+		"task.archived": "arch",
 		"mail.sent": "sent",
 		"memory.added": "mem+",
 		"merge.enqueued": "mrgq",
