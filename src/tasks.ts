@@ -98,6 +98,34 @@ export function listTasks(status?: TaskStatus): Task[] {
 		.all(...params) as Task[];
 }
 
+/** Archive completed/failed tasks that have no active agents */
+export function archiveCompletedTasks(): string[] {
+	const db = getDb();
+	// Find tasks that are completed or failed and have no running/spawning agents
+	const archivable = db
+		.prepare(
+			`SELECT t.task_id as taskId FROM tasks t
+			 WHERE t.status IN ('completed', 'failed')
+			   AND NOT EXISTS (
+			     SELECT 1 FROM agents a
+			     WHERE a.task_id = t.task_id
+			       AND a.status IN ('running', 'spawning', 'completed')
+			   )`,
+		)
+		.all() as { taskId: string }[];
+
+	const archived: string[] = [];
+	for (const { taskId } of archivable) {
+		db.prepare(
+			"UPDATE tasks SET status = 'archived', updated_at = datetime('now') WHERE task_id = ?",
+		).run(taskId);
+		archived.push(taskId);
+		emit("task.archived", `Task "${taskId}" archived`);
+	}
+
+	return archived;
+}
+
 /** Increment a task's retry count and return the new count */
 export function incrementRetryCount(taskId: string): number {
 	const db = getDb();

@@ -50,7 +50,7 @@ export interface Task {
 	updatedAt: string;
 }
 
-export type TaskStatus = "pending" | "in_progress" | "completed" | "failed";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "failed" | "archived";
 
 /** Entry in the merge queue */
 export interface MergeEntry {

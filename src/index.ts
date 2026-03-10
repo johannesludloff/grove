@@ -6,7 +6,7 @@ import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createTask, getTask, listTasks, updateTask } from "./tasks.ts";
+import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
@@ -201,14 +201,14 @@ taskCmd
 	.command("update")
 	.description("Update a task's status")
 	.argument("<task-id>", "Task ID to update")
-	.requiredOption("-s, --status <status>", "New status (pending/in_progress/completed/failed)")
+	.requiredOption("-s, --status <status>", "New status (pending/in_progress/completed/failed/archived)")
 	.action((taskId: string, opts: { status: string }) => {
 		const task = getTask(taskId);
 		if (!task) {
 			console.error(`Task "${taskId}" not found.`);
 			process.exit(1);
 		}
-		const validStatuses: TaskStatus[] = ["pending", "in_progress", "completed", "failed"];
+		const validStatuses: TaskStatus[] = ["pending", "in_progress", "completed", "failed", "archived"];
 		if (!validStatuses.includes(opts.status as TaskStatus)) {
 			console.error(`Invalid status "${opts.status}". Valid: ${validStatuses.join(", ")}`);
 			process.exit(1);
@@ -220,8 +220,17 @@ taskCmd
 taskCmd
 	.command("list")
 	.option("-s, --status <status>", "Filter by status")
-	.action((opts: { status?: string }) => {
-		const tasks = listTasks(opts.status as TaskStatus | undefined);
+	.option("-a, --all", "Show all tasks including archived")
+	.action((opts: { status?: string; all?: boolean }) => {
+		let tasks: ReturnType<typeof listTasks>;
+		if (opts.status) {
+			tasks = listTasks(opts.status as TaskStatus);
+		} else if (opts.all) {
+			tasks = listTasks();
+		} else {
+			// Default: show only active tasks (exclude archived)
+			tasks = listTasks().filter((t) => t.status !== "archived");
+		}
 		if (tasks.length === 0) {
 			console.log("No tasks.");
 			return;
@@ -931,6 +940,12 @@ program
 			}
 
 			console.log(`Cleaned ${cleaned} agent worktree(s).`);
+
+			// Archive completed/failed tasks with no active agents
+			const archivedTasks = archiveCompletedTasks();
+			if (archivedTasks.length > 0) {
+				console.log(`Archived ${archivedTasks.length} task(s): ${archivedTasks.join(", ")}`);
+			}
 
 			// Stop watchdog if no running agents remain
 			const remaining = listAgents("running");
