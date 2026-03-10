@@ -1238,6 +1238,11 @@ program
 
 		const status = doneMail ? "completed" : "failed";
 
+		// Mark the completion mail as read so it doesn't stay unread forever
+		if (doneMail) {
+			markRead(doneMail.id);
+		}
+
 		db.prepare(
 			"UPDATE agents SET status = ?, updated_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')",
 		).run(status, agent.name);
