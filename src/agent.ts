@@ -1079,6 +1079,7 @@ export function reconcileZombies(): string[] {
 				});
 
 				updateTask(agent.taskId, { status: "completed" });
+				markRead(completionMail.id);
 			} else {
 				db.prepare(
 					"UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?",
