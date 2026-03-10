@@ -98,6 +98,19 @@ export function listTasks(status?: TaskStatus): Task[] {
 		.all(...params) as Task[];
 }
 
+/** Remove completed/failed tasks that have no active agents */
+export function cleanupFinishedTasks(): number {
+	const db = getDb();
+	const result = db.prepare(`
+		DELETE FROM tasks
+		WHERE status IN ('completed', 'failed')
+		AND task_id NOT IN (
+			SELECT DISTINCT task_id FROM agents WHERE status IN ('running', 'spawning')
+		)
+	`).run();
+	return result.changes;
+}
+
 /** Increment a task's retry count and return the new count */
 export function incrementRetryCount(taskId: string): number {
 	const db = getDb();

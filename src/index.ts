@@ -6,7 +6,7 @@ import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createTask, getTask, listTasks, updateTask } from "./tasks.ts";
+import { createTask, getTask, listTasks, updateTask, cleanupFinishedTasks } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
@@ -220,8 +220,20 @@ taskCmd
 taskCmd
 	.command("list")
 	.option("-s, --status <status>", "Filter by status")
-	.action((opts: { status?: string }) => {
-		const tasks = listTasks(opts.status as TaskStatus | undefined);
+	.option("-a, --all", "Show all tasks including completed/failed (default: active only)")
+	.action((opts: { status?: string; all?: boolean }) => {
+		let tasks;
+		if (opts.status) {
+			tasks = listTasks(opts.status as TaskStatus);
+		} else if (opts.all) {
+			tasks = listTasks();
+		} else {
+			// Default: show only active tasks (pending + in_progress)
+			tasks = [
+				...listTasks("pending"),
+				...listTasks("in_progress"),
+			];
+		}
 		if (tasks.length === 0) {
 			console.log("No tasks.");
 			return;
@@ -931,6 +943,12 @@ program
 			}
 
 			console.log(`Cleaned ${cleaned} agent worktree(s).`);
+
+			// Remove completed/failed tasks with no active agents
+			const removedTasks = cleanupFinishedTasks();
+			if (removedTasks > 0) {
+				console.log(`Removed ${removedTasks} finished task(s).`);
+			}
 
 			// Stop watchdog if no running agents remain
 			const remaining = listAgents("running");
