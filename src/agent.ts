@@ -527,7 +527,15 @@ export async function spawnAgent(opts: {
 						body: `Auto-stopped after ${timeoutMs / 60_000} minutes with no output. Capability: ${opts.capability}.`,
 						type: "error",
 					});
-					updateTask(opts.taskId, { status: "failed" });
+					// Update task — only if no other agents for this task are still active
+					const remainingTimeout = getDb()
+						.prepare(
+							"SELECT COUNT(*) as count FROM agents WHERE task_id = ? AND name != ? AND status IN ('running', 'spawning')",
+						)
+						.get(opts.taskId, opts.name) as { count: number };
+					if (remainingTimeout.count === 0) {
+						updateTask(opts.taskId, { status: "failed" });
+					}
 				}
 			}
 		} catch {
@@ -583,10 +591,17 @@ export async function spawnAgent(opts: {
 			type: status === "completed" ? "done" : "error",
 		});
 
-		// Update task
-		updateTask(opts.taskId, {
-			status: status === "completed" ? "completed" : "failed",
-		});
+		// Update task — only if no other agents for this task are still active
+		const remainingForTask = liveDb
+			.prepare(
+				"SELECT COUNT(*) as count FROM agents WHERE task_id = ? AND name != ? AND status IN ('running', 'spawning')",
+			)
+			.get(opts.taskId, opts.name) as { count: number };
+		if (remainingForTask.count === 0) {
+			updateTask(opts.taskId, {
+				status: status === "completed" ? "completed" : "failed",
+			});
+		}
 
 		// Auto-retry on failure
 		if (status === "failed") {
@@ -1094,7 +1109,15 @@ export function reconcileZombies(): string[] {
 					agent: agent.name,
 				});
 
-				updateTask(agent.taskId, { status: "completed" });
+				// Update task — only if no other agents for this task are still active
+				const remainingCompleted = db
+					.prepare(
+						"SELECT COUNT(*) as count FROM agents WHERE task_id = ? AND name != ? AND status IN ('running', 'spawning')",
+					)
+					.get(agent.taskId, agent.name) as { count: number };
+				if (remainingCompleted.count === 0) {
+					updateTask(agent.taskId, { status: "completed" });
+				}
 				markRead(completionMail.id);
 			} else {
 				db.prepare(
@@ -1114,7 +1137,15 @@ export function reconcileZombies(): string[] {
 					type: "error",
 				});
 
-				updateTask(agent.taskId, { status: "failed" });
+				// Update task — only if no other agents for this task are still active
+				const remainingFailed = db
+					.prepare(
+						"SELECT COUNT(*) as count FROM agents WHERE task_id = ? AND name != ? AND status IN ('running', 'spawning')",
+					)
+					.get(agent.taskId, agent.name) as { count: number };
+				if (remainingFailed.count === 0) {
+					updateTask(agent.taskId, { status: "failed" });
+				}
 
 				// Auto-retry only genuinely failed agents (no completion mail)
 				const task = getTask(agent.taskId);
@@ -1161,6 +1192,16 @@ export async function stopAgent(name: string): Promise<void> {
 	db.prepare("UPDATE agents SET status = 'stopped', updated_at = datetime('now') WHERE name = ?").run(name);
 
 	emit("agent.stopped", `Agent "${name}" was stopped`, { agent: name });
+
+	// Update task — mark as failed if no other agents for this task are still active
+	const remainingStopped = db
+		.prepare(
+			"SELECT COUNT(*) as count FROM agents WHERE task_id = ? AND name != ? AND status IN ('running', 'spawning')",
+		)
+		.get(agent.taskId, name) as { count: number };
+	if (remainingStopped.count === 0) {
+		updateTask(agent.taskId, { status: "failed" });
+	}
 
 	// Cascade stop: stop all running children of this agent
 	const children = db
