@@ -10,6 +10,7 @@ import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.t
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
 import { installAgentHooks } from "./hooks.ts";
+import { buildCheckpointBlock } from "./checkpoint.ts";
 
 /** Common English stopwords for keyword extraction */
 const STOPWORDS = new Set([
@@ -407,6 +408,7 @@ export async function spawnAgent(opts: {
 			? buildSiblingBlock(opts.parentName, opts.name)
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
+		const checkpointBlock = buildCheckpointBlock(opts.taskId, opts.name);
 
 		// Include scout findings for builders and leads (scouts don't need their own findings)
 		const scoutFindingsBlock =
@@ -430,6 +432,7 @@ export async function spawnAgent(opts: {
 			priorWorkBlock,
 			scoutFindingsBlock,
 			fileOwnershipBlock,
+			checkpointBlock,
 			opts.parentName,
 			depth,
 		);
@@ -841,6 +844,7 @@ function buildPrompt(
 	priorWorkBlock: string,
 	scoutFindingsBlock: string,
 	fileOwnershipBlock: string,
+	checkpointBlock: string,
 	parentName?: string,
 	depth?: number,
 ): string {
@@ -850,6 +854,7 @@ function buildPrompt(
 	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
 	const scoutSection = scoutFindingsBlock ? `\n${scoutFindingsBlock}\n` : "";
 	const fileOwnershipSection = fileOwnershipBlock ? `\n${fileOwnershipBlock}\n` : "";
+	const checkpointSection = checkpointBlock ? `\n${checkpointBlock}\n` : "";
 
 	// Build the structured startup beacon
 	const timestamp = new Date().toISOString();
@@ -882,7 +887,7 @@ ${checklistLines}`;
 	return `${systemPart}
 
 ${beacon}
-${memorySection}${siblingSection}${priorWorkSection}${scoutSection}${fileOwnershipSection}
+${memorySection}${siblingSection}${priorWorkSection}${scoutSection}${fileOwnershipSection}${checkpointSection}
 ## Your Task
 ${taskDescription}
 

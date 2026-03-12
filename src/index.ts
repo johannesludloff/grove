@@ -21,8 +21,10 @@ import { installHooks, uninstallHooks, statusHooks } from "./hooks.ts";
 import { collectBenchmarks, storeBenchmarkRun, getPreviousRun, displayReport, listRuns } from "./benchmark.ts";
 import { startWatchdog, stopWatchdog, isWatchdogRunning } from "./watchdog.ts";
 import { runHealthChecks, formatHealthReport } from "./health.ts";
+import { writeCheckpoint, readCheckpoint, autoCheckpointFromTool } from "./checkpoint.ts";
 import type { AgentCapability, MailType, TaskStatus, MergeTier } from "./types.ts";
 import type { MemoryType } from "./memory.ts";
+import type { Checkpoint } from "./checkpoint.ts";
 
 const program = new Command();
 
@@ -1154,6 +1156,16 @@ program
 				} catch {
 					// Log dir may not exist yet — ignore
 				}
+
+				// Auto-update checkpoint with file tracking
+				const toolInput = (typeof inputRaw === "object" && inputRaw !== null)
+					? inputRaw as Record<string, unknown>
+					: {};
+				try {
+					await autoCheckpointFromTool(agentName, toolName, toolInput);
+				} catch {
+					// Checkpoint write failure should not block the hook
+				}
 			}
 
 			process.exit(0);
@@ -1334,6 +1346,76 @@ program
 		process.exit(2);
 	});
 
+// ── grove checkpoint ────────────────────────────────────────────────────
+program
+	.command("checkpoint")
+	.description("Save or read an agent checkpoint for recovery")
+	.option("--agent <name>", "Agent name (auto-detected from branch if omitted)")
+	.option("--phase <phase>", "Current phase: scout, build, review, plan, complete")
+	.option("--step <step>", "Description of current step")
+	.option("--finding <finding>", "Add a key finding (can be repeated)", (val: string, prev: string[]) => [...prev, val], [] as string[])
+	.option("--file-explored <path>", "Add an explored file (can be repeated)", (val: string, prev: string[]) => [...prev, val], [] as string[])
+	.option("--file-modified <path>", "Add a modified file (can be repeated)", (val: string, prev: string[]) => [...prev, val], [] as string[])
+	.option("--read", "Read the current checkpoint instead of writing")
+	.action(async (opts: {
+		agent?: string;
+		phase?: string;
+		step?: string;
+		finding?: string[];
+		fileExplored?: string[];
+		fileModified?: string[];
+		read?: boolean;
+	}) => {
+		// Auto-detect agent name from git branch
+		let agentName = opts.agent;
+		if (!agentName) {
+			try {
+				const branch = execSync("git branch --show-current", { encoding: "utf8" }).trim();
+				if (branch.startsWith("grove/")) {
+					agentName = branch.slice("grove/".length);
+				}
+			} catch {
+				// Fall through
+			}
+		}
+
+		if (!agentName) {
+			console.error("Could not detect agent name. Use --agent <name>.");
+			process.exit(1);
+		}
+
+		if (opts.read) {
+			const checkpoint = readCheckpoint(agentName);
+			if (!checkpoint) {
+				console.log("No checkpoint found.");
+			} else {
+				console.log(JSON.stringify(checkpoint, null, 2));
+			}
+			return;
+		}
+
+		// Build partial checkpoint from CLI options
+		const data: Partial<Checkpoint> = {};
+		if (opts.phase) {
+			data.phase = opts.phase as Checkpoint["phase"];
+		}
+		if (opts.step) {
+			data.currentStep = opts.step;
+		}
+		if (opts.finding && opts.finding.length > 0) {
+			data.keyFindings = opts.finding;
+		}
+		if (opts.fileExplored && opts.fileExplored.length > 0) {
+			data.filesExplored = opts.fileExplored;
+		}
+		if (opts.fileModified && opts.fileModified.length > 0) {
+			data.filesModified = opts.fileModified;
+		}
+
+		await writeCheckpoint(agentName, data);
+		console.log(`Checkpoint saved for ${agentName}.`);
+	});
+
 // ── grove session-end (SessionEnd hook target) ─────────────────────────
 program
 	.command("session-end")
@@ -1425,7 +1507,7 @@ program
 program.hook("postAction", (_, actionCommand) => {
 	// Don't close DB for long-running commands that poll, or for commands that don't use DB
 	const name = actionCommand.name();
-	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric" || name === "spawn") return;
+	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric" || name === "spawn" || name === "checkpoint") return;
 	closeDb();
 });
 
