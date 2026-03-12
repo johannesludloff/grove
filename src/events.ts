@@ -19,7 +19,9 @@ export type EventType =
 	| "merge.started"
 	| "merge.completed"
 	| "merge.conflict"
-	| "merge.failed";
+	| "merge.failed"
+	| "watchdog.nudge"
+	| "watchdog.escalate";
 
 export interface GroveEvent {
 	id: number;
