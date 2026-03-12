@@ -6,7 +6,7 @@ import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks } from "./tasks.ts";
+import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, getTaskDependencies } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
@@ -192,23 +192,36 @@ taskCmd
 	.argument("<task-id>", "Unique task identifier")
 	.argument("<title>", "Task title")
 	.option("-d, --description <text>", "Task description")
-	.action((taskId: string, title: string, opts: { description?: string }) => {
-		const task = createTask({ taskId, title, description: opts.description });
-		console.log(`Created task: ${task.taskId} — ${task.title}`);
+	.option("--depends-on <ids>", "Comma-separated task IDs this task depends on")
+	.action((taskId: string, title: string, opts: { description?: string; dependsOn?: string }) => {
+		const dependsOn = opts.dependsOn
+			? opts.dependsOn.split(",").map((s) => s.trim()).filter(Boolean)
+			: undefined;
+		try {
+			const task = createTask({ taskId, title, description: opts.description, dependsOn });
+			const statusNote = task.status === "blocked" ? " (blocked — waiting on dependencies)" : "";
+			console.log(`Created task: ${task.taskId} — ${task.title}${statusNote}`);
+			if (dependsOn?.length) {
+				console.log(`  Dependencies: ${dependsOn.join(", ")}`);
+			}
+		} catch (err: unknown) {
+			console.error((err as Error).message);
+			process.exit(1);
+		}
 	});
 
 taskCmd
 	.command("update")
 	.description("Update a task's status")
 	.argument("<task-id>", "Task ID to update")
-	.requiredOption("-s, --status <status>", "New status (pending/in_progress/completed/failed/archived)")
+	.requiredOption("-s, --status <status>", "New status (pending/blocked/in_progress/completed/failed/archived)")
 	.action((taskId: string, opts: { status: string }) => {
 		const task = getTask(taskId);
 		if (!task) {
 			console.error(`Task "${taskId}" not found.`);
 			process.exit(1);
 		}
-		const validStatuses: TaskStatus[] = ["pending", "in_progress", "completed", "failed", "archived"];
+		const validStatuses: TaskStatus[] = ["pending", "blocked", "in_progress", "completed", "failed", "archived"];
 		if (!validStatuses.includes(opts.status as TaskStatus)) {
 			console.error(`Invalid status "${opts.status}". Valid: ${validStatuses.join(", ")}`);
 			process.exit(1);
@@ -237,7 +250,9 @@ taskCmd
 		}
 		for (const t of tasks) {
 			const assignee = t.assignedTo ? ` → ${t.assignedTo}` : "";
-			console.log(`  [${t.status}] ${t.taskId}: ${t.title}${assignee}`);
+			const deps = getTaskDependencies(t.taskId);
+			const depsNote = deps.length ? ` (depends on: ${deps.join(", ")})` : "";
+			console.log(`  [${t.status}] ${t.taskId}: ${t.title}${assignee}${depsNote}`);
 		}
 	});
 
@@ -261,6 +276,13 @@ program
 			const task = getTask(taskId);
 			if (!task) {
 				console.error(`Task "${taskId}" not found. Create it first: grove task add ${taskId} "title"`);
+				process.exit(1);
+			}
+
+			if (task.status === "blocked") {
+				const deps = getTaskDependencies(taskId);
+				console.error(`Task "${taskId}" is blocked — waiting on dependencies: ${deps.join(", ")}`);
+				console.error("Cannot spawn agents for blocked tasks.");
 				process.exit(1);
 			}
 
