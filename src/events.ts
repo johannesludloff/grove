@@ -12,6 +12,7 @@ export type EventType =
 	| "task.assigned"
 	| "task.completed"
 	| "task.failed"
+	| "task.unblocked"
 	| "task.archived"
 	| "mail.sent"
 	| "memory.added"

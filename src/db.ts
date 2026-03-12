@@ -132,6 +132,17 @@ function ensureTables(db: Database): void {
 
 		CREATE INDEX IF NOT EXISTS idx_benchmarks_run_id ON benchmarks(run_id);
 		CREATE INDEX IF NOT EXISTS idx_benchmarks_metric ON benchmarks(metric);
+
+		CREATE TABLE IF NOT EXISTS task_dependencies (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			depends_on TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(task_id, depends_on)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
+		CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on);
 	`);
 
 	// Migrate: add last_activity_at column if it doesn't exist yet
