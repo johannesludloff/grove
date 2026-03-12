@@ -454,7 +454,7 @@ export async function spawnAgent(opts: {
 	const stdoutFile = `${logDir}/stdout.txt`;
 	let lastKnownSize = 0;
 	const timeoutMs = CAPABILITY_TIMEOUTS[opts.capability];
-	const HEARTBEAT_INTERVAL_MS = 2 * 60_000;
+	const HEARTBEAT_INTERVAL_MS = 60_000;
 	let lastHeartbeatAt = Date.now();
 
 	const activityPoller = setInterval(async () => {
@@ -479,11 +479,27 @@ export async function spawnAgent(opts: {
 				if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
 					lastHeartbeatAt = now;
 					const recipient = opts.parentName ?? "orchestrator";
+
+					// Read last-tool.json for context enrichment
+					let lastToolInfo = "";
+					try {
+						const lastToolPath = `${logDir}/last-tool.json`;
+						const lastToolFile = Bun.file(lastToolPath);
+						if (await lastToolFile.exists()) {
+							const data = JSON.parse(await lastToolFile.text()) as { tool?: string; inputSummary?: string; timestamp?: string };
+							if (data.tool) {
+								lastToolInfo = ` Last tool: ${data.tool} on ${data.inputSummary ?? "unknown"} at ${data.timestamp ?? "unknown"}`;
+							}
+						}
+					} catch {
+						// File may not exist or be unreadable — ignore
+					}
+
 					sendMail({
 						from: opts.name,
 						to: recipient,
 						subject: `Heartbeat: ${opts.name}`,
-						body: `Agent is running and producing output (stdout: ${size} bytes).`,
+						body: `Agent ${opts.name} heartbeat: ${size} bytes output.${lastToolInfo}`,
 						type: "status",
 					});
 				}

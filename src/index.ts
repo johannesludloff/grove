@@ -1105,6 +1105,28 @@ program
 			}
 
 			getDb().prepare("INSERT INTO tool_metrics (agent_name, tool_name, success) VALUES (?, ?, ?)").run(agentName, toolName, success);
+
+			// Write last-tool context for heartbeat enrichment
+			if (agentName !== "orchestrator") {
+				const inputRaw = (data as Record<string, unknown>).tool_input;
+				let inputSummary = "";
+				if (typeof inputRaw === "string") {
+					inputSummary = inputRaw.slice(0, 120);
+				} else if (inputRaw && typeof inputRaw === "object") {
+					const obj = inputRaw as Record<string, unknown>;
+					const firstKey = Object.keys(obj)[0];
+					if (firstKey) {
+						inputSummary = `${firstKey}: ${String(obj[firstKey]).slice(0, 100)}`;
+					}
+				}
+				const lastToolPath = `${groveDir}/logs/${agentName}/last-tool.json`;
+				try {
+					await Bun.write(lastToolPath, JSON.stringify({ tool: toolName, inputSummary, timestamp: new Date().toISOString() }));
+				} catch {
+					// Log dir may not exist yet — ignore
+				}
+			}
+
 			process.exit(0);
 		} catch {
 			process.exit(0);
