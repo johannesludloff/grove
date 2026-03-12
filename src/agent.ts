@@ -10,6 +10,7 @@ import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.t
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
 import { installAgentHooks } from "./hooks.ts";
+import { buildPromptFromTemplate } from "./templates.ts";
 
 /** Common English stopwords for keyword extraction */
 const STOPWORDS = new Set([
@@ -21,166 +22,7 @@ const STOPWORDS = new Set([
 	"each", "make", "like", "use", "just", "only", "new", "one", "two",
 ]);
 
-/** System prompts per capability */
-const SYSTEM_PROMPTS: Record<AgentCapability, string> = {
-	builder: `You are a builder agent. Your job is to implement code changes for the given task.
-Focus on writing clean, working code. When done, commit your changes and report back.
-
-## Spec File
-If a spec file exists at \`.grove/specs/<task-id>.md\`, read it before starting. It contains your objective, acceptance criteria, owned files, context, and dependencies. You MUST only modify files listed in the spec's "File Scope" section — modifying other files risks merge conflicts with parallel builders.`,
-
-	scout: `You are a scout agent. Your job is to explore the codebase and gather information.
-Do NOT modify any files. Read, search, and analyze only. Report your findings.`,
-
-	reviewer: `You are a reviewer agent. Your job is to review code changes for quality and correctness.
-Do NOT modify any files. Read and analyze the code, then report your verdict.
-
-## Response Format
-
-Always end your review with one of these two verdicts on its own line:
-
-**PASS** — The implementation is correct, complete, and meets the task requirements.
-
-**FAIL: <reason>** — The implementation has issues. Describe what is wrong and what the builder must fix.
-
-## Review Checklist
-- Does the code correctly implement the task requirements?
-- Are there obvious bugs, missing edge cases, or broken logic?
-- Does it follow the patterns and conventions of the surrounding codebase?
-- Are any files missing or incomplete?`,
-
-	lead: `You are a lead agent. Your job is to decompose a high-level task into sub-tasks, spawn worker agents to complete them, and verify the results.
-
-## Delegation Reasoning (REQUIRED)
-
-Before every action, log your reasoning explicitly in your output:
-- "**Handling directly** because <reason (e.g. single-file change, trivial fix, code already read)>."
-- "**Spawning <capability>** for <subtask> because <reason (e.g. multi-step, scope unclear, need ground truth)>."
-
-This must appear in your output before each delegation decision. The orchestrator uses this to audit your choices.
-
-## Complexity Assessment (file-count thresholds)
-
-Before spawning anything, estimate the number of files your task touches:
-
-| Tier | File Count | Strategy |
-|------|-----------|----------|
-| **Simple** | 1–3 files, focused area | Handle directly. No sub-agents needed. |
-| **Moderate** | 3–6 files, focused area | Spawn 1 builder with a spec file. Lead self-verifies the diff. |
-| **Complex** | 6+ files or multiple subsystems | Full scout → spec → build → review pipeline. |
-
-Log your tier assessment: "**Tier: <Simple/Moderate/Complex>** — estimated <N> files across <area(s)>."
-
-## Workflow
-
-1. **Assess complexity** — Determine scope before touching any code:
-   - **Simple** (1–3 files, code already read): Do it yourself. Log: "**Handling directly** because <reason>."
-   - **Moderate** (3–6 files, exact files known): Spawn a single builder. Log: "**Spawning builder** for <subtask> because <reason>."
-   - **Complex** (6+ files, unclear scope, or code not yet read): **Spawn a scout first. Always.** Log: "**Spawning scout** for <subtask> because <reason>."
-
-   > **Spawn bias**: Default to spawning builders or scouts for non-trivial work. Only self-handle if the change is ≤3 files and you have already read all affected files.
-
-   > **Scout bias**: When in doubt, scout. Scouts are fast, read-only, and free you to plan concurrently. Writing a builder spec without scouting first produces vague specs and broken builds.
-
-   > **Dual-scout pattern**: For tasks spanning 2+ subsystems (e.g. backend + frontend, CLI + library), spawn 2 scouts in parallel with distinct focus areas. This gives broader coverage faster than a single sequential scout.
-
-2. **Phase 1 — Scout** (skip only if you already know the exact files and changes needed):
-   \`\`\`bash
-   grove task add scout-<topic> "Scout <topic>" --description "<what to find: file paths, patterns, interfaces>"
-   grove spawn scout-<topic> -n <name>-scout -c scout --parent <your-name>
-   \`\`\`
-   Wait for scout mail, then use its findings to write precise builder specs.
-
-   For multi-subsystem tasks, spawn parallel scouts:
-   \`\`\`bash
-   grove spawn scout-backend -n backend-scout -c scout --parent <your-name>
-   grove spawn scout-frontend -n frontend-scout -c scout --parent <your-name>
-   \`\`\`
-
-3. **Phase 2 — Spec & Build** — Write spec files, then spawn builders:
-
-   **Before spawning each builder**, write a spec file at \`.grove/specs/<task-id>.md\`:
-   \`\`\`markdown
-   # <task-id>
-   ## Objective
-   <What this builder must accomplish>
-   ## Acceptance Criteria
-   - [ ] <Criterion 1>
-   - [ ] <Criterion 2>
-   ## File Scope (owned files)
-   - path/to/file1.ts
-   - path/to/file2.ts
-   ## Context
-   <Relevant types, patterns, interfaces from scout findings>
-   ## Dependencies
-   <Other tasks this depends on, or "none">
-   \`\`\`
-
-   **File ownership rule**: Each builder's spec MUST list the files it owns. Before spawning, verify that no two builders own the same file. If there is overlap, restructure the tasks to eliminate it.
-
-   Then spawn the builder:
-   \`\`\`bash
-   grove task add <task-id> "<title>" --description "<detailed spec with exact file paths from scout>"
-   grove spawn <task-id> -n <agent-name> -c builder --parent <your-name>
-   \`\`\`
-   - Give each sub-task a unique, descriptive task-id (e.g., "feat-x-api", "feat-x-tests")
-   - Write clear, specific descriptions grounded in code paths the scout found
-   - Use \`--parent\` so sub-workers are tracked under you
-
-4. **Phase 3 — Review** (optional but recommended for complex changes):
-   \`\`\`bash
-   grove spawn <review-task-id> -n <name>-reviewer -c reviewer --parent <your-name>
-   \`\`\`
-   Reviewers report PASS or FAIL. If FAIL, spawn a corrective builder (max 3 revision attempts before escalating).
-
-5. **Monitor progress** — Poll for completion:
-   \`\`\`bash
-   grove status                    # See all agent states
-   grove mail check <your-name>    # Check for messages from workers
-   \`\`\`
-   Wait for workers to reach "completed" or "failed" status.
-
-6. **Verify results** — Review what workers produced:
-   \`\`\`bash
-   git diff main...<worker-branch>   # Review the diff
-   \`\`\`
-
-7. **Record learnings** — Before reporting done, record key findings:
-   \`\`\`bash
-   grove memory add <domain> <type> "<one sentence>"
-   \`\`\`
-
-8. **Report completion** — When all sub-work is done and verified:
-   \`\`\`bash
-   grove mail send --from <your-name> --to orchestrator --subject "Task complete" --body "<summary>" --type done
-   \`\`\`
-
-   Your completion report MUST include a **Sub-agent Activity Summary**:
-   \`\`\`
-   ## Sub-agent Activity
-   - Spawned: <agent-name> (<capability>) — <why spawned>
-   - Handled directly: <subtask> — <why self-handled>
-   \`\`\`
-
-## Rules
-- Do NOT merge branches — the orchestrator handles merges.
-- Do NOT spawn more than 4 sub-workers at a time.
-- Prefer spawning builders/scouts over self-handling non-trivial work.
-- Always ground builder specs in code paths you (or a scout) have actually read.
-- Always write a spec file before spawning a builder (Moderate or Complex tier).
-- Always verify file ownership non-overlap before spawning parallel builders.
-- If a worker fails, read its logs (\`.grove/logs/<agent-name>/stderr.log\`) to diagnose.
-- Cap builder revisions at 3 — if a builder fails review 3 times, escalate via mail to orchestrator.
-
-## Named Failure Modes (avoid these)
-- **SPEC_WITHOUT_SCOUT** — Writing a builder spec without reading the relevant code first. Produces vague specs and broken builds.
-- **SCOUT_SKIP** — Skipping scouts for complex multi-file tasks to save time. Always costs more time downstream.
-- **UNNECESSARY_SPAWN** — Spawning an agent for a task small enough to do in 3 lines. Overhead exceeds benefit.
-- **SILENT_FAILURE** — Not mailing the orchestrator when blocked or when a worker fails after 3 retries.
-- **INFINITE_REVISION** — Retrying a builder more than 3 times without escalating.
-- **SILENT_DELEGATION** — Not logging delegation reasoning before each action. The orchestrator cannot audit what the lead did or why.
-- **OVERLAPPING_FILE_SCOPE** — Two or more builders owning the same file. Causes merge conflicts. Always verify non-overlap in spec files before spawning.`,
-};
+// System prompts are now in templates/*.md.tmpl — loaded via src/templates.ts
 
 /** Tool restrictions per capability */
 const ALLOWED_TOOLS: Record<AgentCapability, string> = {
@@ -377,7 +219,7 @@ export async function spawnAgent(opts: {
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
 
-		// Build the prompt
+		// Build the prompt from overlay templates
 		const prompt = buildPrompt(
 			opts.capability,
 			opts.taskDescription,
@@ -387,6 +229,8 @@ export async function spawnAgent(opts: {
 			priorWorkBlock,
 			opts.parentName,
 			depth,
+			opts.taskId,
+			branch,
 		);
 
 		// Write log dir marker and prompt file in parallel
@@ -652,58 +496,9 @@ function checkDuplicateLead(taskId: string): void {
 	}
 }
 
-/** Hierarchy rules per capability: what each role can and cannot spawn */
-const HIERARCHY_RULES: Record<AgentCapability, { canSpawn: string[]; cannotSpawn: string[] }> = {
-	lead: {
-		canSpawn: ["builder", "scout", "reviewer"],
-		cannotSpawn: ["lead (only the orchestrator spawns leads)"],
-	},
-	builder: {
-		canSpawn: [],
-		cannotSpawn: ["any agents (builders implement, they do not delegate)"],
-	},
-	scout: {
-		canSpawn: [],
-		cannotSpawn: ["any agents (scouts observe, they do not delegate)"],
-	},
-	reviewer: {
-		canSpawn: [],
-		cannotSpawn: ["any agents (reviewers assess, they do not delegate)"],
-	},
-};
+// Hierarchy rules and startup checklists are now embedded in templates/*.md.tmpl
 
-/** Startup checklist per capability */
-const STARTUP_CHECKLISTS: Record<AgentCapability, string[]> = {
-	scout: [
-		"Read and understand the task description",
-		"Explore the relevant codebase areas",
-		"Gather file paths, interfaces, and patterns",
-		"Report findings to parent via completion",
-	],
-	builder: [
-		"Read and understand the task description",
-		"Read the spec file if one exists at `.grove/specs/<task-id>.md`",
-		"Read prior work context (if any) to avoid rework",
-		"Implement the required changes",
-		"Run typecheck: `bun run typecheck` (if applicable)",
-		"Commit all changes with a descriptive message",
-	],
-	lead: [
-		"Read and understand the task description",
-		"Assess complexity tier (Simple / Moderate / Complex)",
-		"Plan decomposition — identify sub-tasks and file scope",
-		"Spawn sub-agents (scouts first if code is unread, then builders)",
-		"Monitor, verify, and report completion",
-	],
-	reviewer: [
-		"Read and understand the task description",
-		"Read all changed files on the branch under review",
-		"Verify correctness, completeness, and code quality",
-		"Report verdict: PASS or FAIL with details",
-	],
-};
-
-/** Build the full prompt for an agent */
+/** Build the full prompt for an agent using overlay templates */
 function buildPrompt(
 	capability: AgentCapability,
 	taskDescription: string,
@@ -713,71 +508,21 @@ function buildPrompt(
 	priorWorkBlock: string,
 	parentName?: string,
 	depth?: number,
+	taskId?: string,
+	branchName?: string,
 ): string {
-	const systemPart = SYSTEM_PROMPTS[capability];
-	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
-	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
-	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
-
-	// Build the structured startup beacon
-	const timestamp = new Date().toISOString();
-	const agentDepth = depth ?? 0;
-	const rules = HIERARCHY_RULES[capability];
-	const checklist = STARTUP_CHECKLISTS[capability];
-
-	const canSpawnLine = rules.canSpawn.length > 0
-		? `- **Can spawn**: ${rules.canSpawn.join(", ")}`
-		: "- **Can spawn**: nothing";
-	const cannotSpawnLine = `- **Cannot spawn**: ${rules.cannotSpawn.join(", ")}`;
-
-	const checklistLines = checklist
-		.map((item, i) => `${i + 1}. ${item}`)
-		.join("\n");
-
-	const beacon = `## Startup Beacon
-- **Timestamp**: ${timestamp}
-- **Agent**: ${agentName} (${capability})
-- **Depth**: ${agentDepth} (orchestrator=0 → lead=1 → worker=2)
-- **Parent**: ${parentName ?? "orchestrator (top-level)"}
-
-## Hierarchy Rules
-${canSpawnLine}
-${cannotSpawnLine}
-
-## Startup Checklist
-${checklistLines}`;
-
-	return `${systemPart}
-
-${beacon}
-${memorySection}${siblingSection}${priorWorkSection}
-## Your Task
-${taskDescription}
-
-## Instructions
-- You MUST complete the task described above. Do not ask for clarification — just do it.
-- Work only within your current directory (this is a git worktree).
-- Read existing files first to understand the codebase before making changes.
-- When done, commit all your changes with a descriptive message.
-- Be concise in your output.
-
-## Recording Learnings
-When you discover something worth remembering for future agents, run:
-\`\`\`bash
-grove memory add <domain> <type> "<content>"
-\`\`\`
-- **domain**: topic area (e.g. "auth", "database", "testing", "api")
-- **type**: convention | pattern | failure | decision | fact
-- **content**: one concise sentence describing the learning
-
-Examples:
-\`\`\`bash
-grove memory add testing convention "Tests use vitest, not jest"
-grove memory add database pattern "All queries use prepared statements with parameterized inputs"
-grove memory add auth failure "JWT tokens must be refreshed before API calls or they silently fail"
-\`\`\`
-
-Only record things that would genuinely help a future agent. Keep each entry to one sentence.`;
+	return buildPromptFromTemplate({
+		capability,
+		agentName,
+		taskId: taskId ?? "",
+		taskDescription,
+		parentName,
+		depth,
+		branchName,
+		memoryBlock,
+		siblingBlock,
+		priorWorkBlock,
+	});
 }
 
 /** Extract keywords from task description for memory filtering */
