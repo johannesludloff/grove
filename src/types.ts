@@ -65,7 +65,7 @@ export interface MergeEntry {
 }
 
 export type MergeStatus = "pending" | "merging" | "merged" | "conflict" | "failed";
-export type MergeTier = "clean-merge" | "auto-resolve";
+export type MergeTier = "clean-merge" | "auto-resolve" | "ai-resolve";
 
 /** Grove project config */
 export interface GroveConfig {
