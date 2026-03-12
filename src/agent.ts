@@ -415,9 +415,14 @@ export async function spawnAgent(opts: {
 			cwd: worktreePath,
 			stdout: Bun.file(`${logDir}/stdout.txt`),
 			stderr: Bun.file(`${logDir}/stderr.log`),
-			stdin: Bun.file(promptFile),
-			env: { ...process.env, PATH: process.env.PATH, CLAUDECODE: "", GROVE_AGENT: "1" },
+			stdin: "pipe",
+			env: Object.fromEntries(Object.entries({ ...process.env, GROVE_AGENT: "1" }).filter(([k]) => k !== "CLAUDECODE")),
 		});
+		// Write prompt to stdin manually — Bun.file() as stdin does not reliably pipe content
+		const promptContent = await Bun.file(promptFile).text();
+		const stdinWriter = proc.stdin as import("bun").FileSink;
+		stdinWriter.write(promptContent);
+		stdinWriter.end();
 
 		pid = proc.pid;
 
