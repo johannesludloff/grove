@@ -11,6 +11,7 @@ import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
 import { installAgentHooks } from "./hooks.ts";
 import { buildCheckpointBlock } from "./checkpoint.ts";
+import { buildPromptFromTemplate } from "./templates.ts";
 
 /** Common English stopwords for keyword extraction */
 const STOPWORDS = new Set([
@@ -23,6 +24,7 @@ const STOPWORDS = new Set([
 ]);
 
 /** System prompts per capability */
+// @ts-ignore -- kept as reference, templates are primary
 const SYSTEM_PROMPTS: Record<AgentCapability, string> = {
 	builder: `You are a builder agent. Your job is to implement code changes for the given task.
 Focus on writing clean, working code. When done, commit your changes and report back.
@@ -218,6 +220,8 @@ Reviewers report PASS or FAIL. If FAIL, spawn a corrective builder (max 3 revisi
 - **SILENT_DELEGATION** — Not logging delegation reasoning before each spawn. The orchestrator cannot audit what the lead did or why.
 - **OVERLAPPING_FILE_SCOPE** — Two or more builders owning the same file. Causes merge conflicts.`,
 };
+
+// System prompts also available via templates/*.md.tmpl — loaded via src/templates.ts
 
 /** Tool restrictions per capability */
 const ALLOWED_TOOLS: Record<AgentCapability, string> = {
@@ -436,7 +440,7 @@ export async function spawnAgent(opts: {
 				? await buildFileOwnershipBlock(opts.taskId)
 				: "";
 
-		// Build the prompt
+		// Build the prompt from overlay templates
 		const prompt = buildPrompt(
 			opts.capability,
 			opts.taskDescription,
@@ -449,6 +453,8 @@ export async function spawnAgent(opts: {
 			checkpointBlock,
 			opts.parentName,
 			depth,
+			opts.taskId,
+			branch,
 		);
 
 		// Write log dir marker and prompt file in parallel
@@ -797,27 +803,10 @@ function checkDuplicateLead(taskId: string): void {
 	}
 }
 
-/** Hierarchy rules per capability: what each role can and cannot spawn */
-const HIERARCHY_RULES: Record<AgentCapability, { canSpawn: string[]; cannotSpawn: string[] }> = {
-	lead: {
-		canSpawn: ["builder", "scout", "reviewer"],
-		cannotSpawn: ["lead (only the orchestrator spawns leads)"],
-	},
-	builder: {
-		canSpawn: [],
-		cannotSpawn: ["any agents (builders implement, they do not delegate)"],
-	},
-	scout: {
-		canSpawn: [],
-		cannotSpawn: ["any agents (scouts observe, they do not delegate)"],
-	},
-	reviewer: {
-		canSpawn: [],
-		cannotSpawn: ["any agents (reviewers assess, they do not delegate)"],
-	},
-};
+// Hierarchy rules and startup checklists are now embedded in templates/*.md.tmpl
 
 /** Startup checklist per capability */
+// @ts-ignore -- kept as reference, templates are primary
 const STARTUP_CHECKLISTS: Record<AgentCapability, string[]> = {
 	scout: [
 		"Read and understand the task description",
@@ -850,7 +839,7 @@ const STARTUP_CHECKLISTS: Record<AgentCapability, string[]> = {
 	],
 };
 
-/** Build the full prompt for an agent */
+/** Build the full prompt for an agent using overlay templates */
 function buildPrompt(
 	capability: AgentCapability,
 	taskDescription: string,
@@ -863,74 +852,24 @@ function buildPrompt(
 	checkpointBlock: string,
 	parentName?: string,
 	depth?: number,
+	taskId?: string,
+	branchName?: string,
 ): string {
-	const systemPart = SYSTEM_PROMPTS[capability];
-	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
-	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
-	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
-	const scoutSection = scoutFindingsBlock ? `\n${scoutFindingsBlock}\n` : "";
-	const fileOwnershipSection = fileOwnershipBlock ? `\n${fileOwnershipBlock}\n` : "";
-	const checkpointSection = checkpointBlock ? `\n${checkpointBlock}\n` : "";
-
-	// Build the structured startup beacon
-	const timestamp = new Date().toISOString();
-	const agentDepth = depth ?? 0;
-	const rules = HIERARCHY_RULES[capability];
-	const checklist = STARTUP_CHECKLISTS[capability];
-
-	const canSpawnLine = rules.canSpawn.length > 0
-		? `- **Can spawn**: ${rules.canSpawn.join(", ")}`
-		: "- **Can spawn**: nothing";
-	const cannotSpawnLine = `- **Cannot spawn**: ${rules.cannotSpawn.join(", ")}`;
-
-	const checklistLines = checklist
-		.map((item, i) => `${i + 1}. ${item}`)
-		.join("\n");
-
-	const beacon = `## Startup Beacon
-- **Timestamp**: ${timestamp}
-- **Agent**: ${agentName} (${capability})
-- **Depth**: ${agentDepth} (orchestrator=0 → lead=1 → worker=2)
-- **Parent**: ${parentName ?? "orchestrator (top-level)"}
-
-## Hierarchy Rules
-${canSpawnLine}
-${cannotSpawnLine}
-
-## Startup Checklist
-${checklistLines}`;
-
-	return `${systemPart}
-
-${beacon}
-${memorySection}${siblingSection}${priorWorkSection}${scoutSection}${fileOwnershipSection}${checkpointSection}
-## Your Task
-${taskDescription}
-
-## Instructions
-- You MUST complete the task described above. Do not ask for clarification — just do it.
-- Work only within your current directory (this is a git worktree).
-- Read existing files first to understand the codebase before making changes.
-- When done, commit all your changes with a descriptive message.
-- Be concise in your output.
-
-## Recording Learnings
-When you discover something worth remembering for future agents, run:
-\`\`\`bash
-grove memory add <domain> <type> "<content>"
-\`\`\`
-- **domain**: topic area (e.g. "auth", "database", "testing", "api")
-- **type**: convention | pattern | failure | decision | fact
-- **content**: one concise sentence describing the learning
-
-Examples:
-\`\`\`bash
-grove memory add testing convention "Tests use vitest, not jest"
-grove memory add database pattern "All queries use prepared statements with parameterized inputs"
-grove memory add auth failure "JWT tokens must be refreshed before API calls or they silently fail"
-\`\`\`
-
-Only record things that would genuinely help a future agent. Keep each entry to one sentence.`;
+	return buildPromptFromTemplate({
+		capability,
+		agentName,
+		taskId: taskId ?? "",
+		taskDescription,
+		parentName,
+		depth,
+		branchName,
+		memoryBlock,
+		siblingBlock,
+		priorWorkBlock,
+		priorFindings: scoutFindingsBlock,
+		fileScope: fileOwnershipBlock,
+		checkpointBlock,
+	});
 }
 
 /** Extract keywords from task description for memory filtering */
