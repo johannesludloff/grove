@@ -387,8 +387,7 @@ export async function spawnAgent(opts: {
 		);
 		dbInserted = true;
 
-		// Gather context in parallel: memories, sibling info, and prior work
-		// (these are sync DB queries but grouped for clarity and future async readiness)
+		// Gather context in parallel: memories, sibling info, prior work, scout findings, file ownership
 		const memories = queryTaskRelevantMemories(opts.taskDescription);
 		const memoryBlock = renderMemories(memories);
 		if (memories.length > 0) {
@@ -399,6 +398,18 @@ export async function spawnAgent(opts: {
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
 
+		// Include scout findings for builders and leads (scouts don't need their own findings)
+		const scoutFindingsBlock =
+			opts.capability === "builder" || opts.capability === "lead"
+				? buildScoutFindingsBlock(opts.taskId, opts.name)
+				: "";
+
+		// Include file ownership boundaries from spec file (primarily for builders)
+		const fileOwnershipBlock =
+			opts.capability === "builder" || opts.capability === "lead"
+				? await buildFileOwnershipBlock(opts.taskId)
+				: "";
+
 		// Build the prompt
 		const prompt = buildPrompt(
 			opts.capability,
@@ -407,6 +418,8 @@ export async function spawnAgent(opts: {
 			memoryBlock,
 			siblingBlock,
 			priorWorkBlock,
+			scoutFindingsBlock,
+			fileOwnershipBlock,
 			opts.parentName,
 			depth,
 		);
@@ -738,6 +751,8 @@ function buildPrompt(
 	memoryBlock: string,
 	siblingBlock: string,
 	priorWorkBlock: string,
+	scoutFindingsBlock: string,
+	fileOwnershipBlock: string,
 	parentName?: string,
 	depth?: number,
 ): string {
@@ -745,6 +760,8 @@ function buildPrompt(
 	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
 	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
 	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
+	const scoutSection = scoutFindingsBlock ? `\n${scoutFindingsBlock}\n` : "";
+	const fileOwnershipSection = fileOwnershipBlock ? `\n${fileOwnershipBlock}\n` : "";
 
 	// Build the structured startup beacon
 	const timestamp = new Date().toISOString();
@@ -777,7 +794,7 @@ ${checklistLines}`;
 	return `${systemPart}
 
 ${beacon}
-${memorySection}${siblingSection}${priorWorkSection}
+${memorySection}${siblingSection}${priorWorkSection}${scoutSection}${fileOwnershipSection}
 ## Your Task
 ${taskDescription}
 
@@ -918,6 +935,118 @@ function buildPriorWorkBlock(taskId: string, selfName: string): string {
 	}
 
 	return lines.join("\n");
+}
+
+/** Build a context block with scout findings for builder/lead agents on the same task */
+function buildScoutFindingsBlock(taskId: string, selfName: string): string {
+	const db = getDb();
+
+	// Find completion mails from scout agents that worked on this task (or a parent task prefix)
+	const scoutFindings = db
+		.prepare(
+			`SELECT m.body, m.from_agent, m.subject
+			 FROM mail m JOIN agents a ON m.from_agent = a.name
+			 WHERE a.task_id = ? AND a.capability = 'scout' AND a.status = 'completed'
+			   AND a.name != ? AND m.type = 'done'
+			 ORDER BY m.created_at DESC LIMIT 3`,
+		)
+		.all(taskId, selfName) as Array<{
+		body: string;
+		from_agent: string;
+		subject: string;
+	}>;
+
+	// Also look for scouts spawned by the same parent (related task context)
+	// This catches scouts on sibling tasks that discovered relevant file paths
+	const parentScouts = db
+		.prepare(
+			`SELECT m.body, m.from_agent, m.subject
+			 FROM mail m
+			 JOIN agents a ON m.from_agent = a.name
+			 JOIN agents self ON self.name = ?
+			 WHERE a.capability = 'scout' AND a.status = 'completed'
+			   AND a.parent_name = self.parent_name AND a.parent_name IS NOT NULL
+			   AND a.task_id != ? AND a.name != ?
+			   AND m.type = 'done'
+			 ORDER BY m.created_at DESC LIMIT 2`,
+		)
+		.all(selfName, taskId, selfName) as Array<{
+		body: string;
+		from_agent: string;
+		subject: string;
+	}>;
+
+	const allFindings = [...scoutFindings];
+	const seenAgents = new Set(scoutFindings.map((f) => f.from_agent));
+	for (const pf of parentScouts) {
+		if (!seenAgents.has(pf.from_agent)) {
+			allFindings.push(pf);
+			seenAgents.add(pf.from_agent);
+		}
+	}
+
+	if (allFindings.length === 0) return "";
+
+	const lines = ["## Scout Findings", ""];
+	lines.push("The following scouts have explored the codebase for this task:");
+	lines.push("");
+
+	const maxLinesPerFinding = 60;
+	for (const sf of allFindings) {
+		lines.push(`### ${sf.from_agent}`);
+		const bodyLines = sf.body.split("\n");
+		if (bodyLines.length > maxLinesPerFinding) {
+			lines.push(...bodyLines.slice(0, maxLinesPerFinding));
+			lines.push(`... (${bodyLines.length - maxLinesPerFinding} more lines truncated)`);
+		} else {
+			lines.push(sf.body);
+		}
+		lines.push("");
+	}
+
+	return lines.join("\n");
+}
+
+/** Build a context block with file ownership boundaries from the spec file */
+async function buildFileOwnershipBlock(taskId: string): Promise<string> {
+	const specPath = `${process.cwd()}/.grove/specs/${taskId}.md`;
+
+	try {
+		const specFile = Bun.file(specPath);
+		if (!(await specFile.exists())) return "";
+
+		const content = await specFile.text();
+
+		// Extract the File Scope section from the spec
+		const fileScopeMatch = content.match(/## File Scope[^\n]*\n([\s\S]*?)(?=\n## |\n# |$)/);
+		if (!fileScopeMatch?.[1]) return "";
+
+		const fileScopeContent = fileScopeMatch[1].trim();
+		if (!fileScopeContent) return "";
+
+		// Extract file paths (lines starting with - or *)
+		const filePaths = fileScopeContent
+			.split("\n")
+			.map((line) => line.replace(/^[\s*-]+/, "").trim())
+			.filter((line) => line.length > 0 && (line.includes("/") || line.includes(".")));
+
+		if (filePaths.length === 0) return "";
+
+		const lines = ["## File Ownership Boundaries", ""];
+		lines.push("You are authorized to modify ONLY these files:");
+		lines.push("");
+		for (const fp of filePaths) {
+			lines.push(`- \`${fp}\``);
+		}
+		lines.push("");
+		lines.push("**Do NOT modify files outside this list** — other agents may be working on them concurrently.");
+		lines.push("If you need changes in other files, report this in your completion mail so the lead can coordinate.");
+		lines.push("");
+
+		return lines.join("\n");
+	} catch {
+		return "";
+	}
 }
 
 /**
