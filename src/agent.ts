@@ -10,6 +10,7 @@ import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.t
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
 import { installAgentHooks } from "./hooks.ts";
+import { buildCheckpointBlock } from "./checkpoint.ts";
 
 /** Common English stopwords for keyword extraction */
 const STOPWORDS = new Set([
@@ -376,6 +377,7 @@ export async function spawnAgent(opts: {
 			? buildSiblingBlock(opts.parentName, opts.name)
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
+		const checkpointBlock = buildCheckpointBlock(opts.taskId, opts.name);
 
 		// Build the prompt
 		const prompt = buildPrompt(
@@ -385,6 +387,7 @@ export async function spawnAgent(opts: {
 			memoryBlock,
 			siblingBlock,
 			priorWorkBlock,
+			checkpointBlock,
 			opts.parentName,
 			depth,
 		);
@@ -711,6 +714,7 @@ function buildPrompt(
 	memoryBlock: string,
 	siblingBlock: string,
 	priorWorkBlock: string,
+	checkpointBlock: string,
 	parentName?: string,
 	depth?: number,
 ): string {
@@ -718,6 +722,7 @@ function buildPrompt(
 	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
 	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
 	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
+	const checkpointSection = checkpointBlock ? `\n${checkpointBlock}\n` : "";
 
 	// Build the structured startup beacon
 	const timestamp = new Date().toISOString();
@@ -750,7 +755,7 @@ ${checklistLines}`;
 	return `${systemPart}
 
 ${beacon}
-${memorySection}${siblingSection}${priorWorkSection}
+${memorySection}${siblingSection}${priorWorkSection}${checkpointSection}
 ## Your Task
 ${taskDescription}
 
