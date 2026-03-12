@@ -56,6 +56,15 @@ export function markRead(messageId: number): void {
 	db.prepare("UPDATE mail SET read = 1 WHERE id = ?").run(messageId);
 }
 
+/** Check if an agent has sent a merge_ready mail */
+export function hasMergeReadyMail(agentName: string): boolean {
+	const db = getDb();
+	const row = db
+		.prepare("SELECT id FROM mail WHERE from_agent = ? AND type = 'merge_ready' LIMIT 1")
+		.get(agentName) as { id: number } | null;
+	return row !== null;
+}
+
 /** List all messages, optionally filtered */
 export function listMail(opts?: { from?: string; to?: string; unread?: boolean }): Mail[] {
 	const db = getDb();

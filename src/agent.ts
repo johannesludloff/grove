@@ -28,7 +28,14 @@ const SYSTEM_PROMPTS: Record<AgentCapability, string> = {
 Focus on writing clean, working code. When done, commit your changes and report back.
 
 ## Spec File
-If a spec file exists at \`.grove/specs/<task-id>.md\`, read it before starting. It contains your objective, acceptance criteria, owned files, context, and dependencies. You MUST only modify files listed in the spec's "File Scope" section — modifying other files risks merge conflicts with parallel builders.`,
+If a spec file exists at \`.grove/specs/<task-id>.md\`, read it before starting. It contains your objective, acceptance criteria, owned files, context, and dependencies. You MUST only modify files listed in the spec's "File Scope" section — modifying other files risks merge conflicts with parallel builders.
+
+## Merge Ready Signal
+After committing your changes and verifying they compile (typecheck passes), you MUST send a merge_ready signal:
+\`\`\`bash
+grove mail send --from <your-agent-name> --to orchestrator --subject "merge_ready: <your-agent-name>" --body "Verified: typecheck passed, changes committed." --type merge_ready
+\`\`\`
+The orchestrator will NOT merge your branch until it receives this signal. Only send it after your changes are committed and validated.`,
 
 	scout: `You are a scout agent. Your job is to explore the codebase and gather information.
 Do NOT modify any files. Read, search, and analyze only. Report your findings.`,
@@ -173,6 +180,13 @@ Reviewers report PASS or FAIL. If FAIL, spawn a corrective builder (max 3 revisi
    \`\`\`bash
    grove mail send --from <your-name> --to orchestrator --subject "Task complete" --body "<summary>" --type done
    \`\`\`
+
+9. **Send merge_ready signal** — After verifying all sub-agents' work compiles and is correct, send the merge_ready signal for yourself and each completed sub-agent:
+   \`\`\`bash
+   grove mail send --from <sub-agent-name> --to orchestrator --subject "merge_ready: <sub-agent-name>" --body "Verified by lead." --type merge_ready
+   grove mail send --from <your-name> --to orchestrator --subject "merge_ready: <your-name>" --body "All sub-work verified." --type merge_ready
+   \`\`\`
+   The orchestrator will NOT merge any branch until it has a merge_ready signal. Builders send their own signal after typecheck, but as lead you may also send on behalf of sub-agents if you've verified their work.
 
    Your completion report MUST include a **Sub-agent Activity Summary**:
    \`\`\`
@@ -818,6 +832,7 @@ const STARTUP_CHECKLISTS: Record<AgentCapability, string[]> = {
 		"Implement the required changes",
 		"Run typecheck: `bun run typecheck` (if applicable)",
 		"Commit all changes with a descriptive message",
+		"Send merge_ready signal: `grove mail send --from <name> --to orchestrator --subject 'merge_ready: <name>' --body 'Verified.' --type merge_ready`",
 	],
 	lead: [
 		"Read and understand the task description",
@@ -825,6 +840,7 @@ const STARTUP_CHECKLISTS: Record<AgentCapability, string[]> = {
 		"Plan decomposition — identify sub-tasks and file scope",
 		"Spawn sub-agents (scouts first if code is unread, then builders)",
 		"Monitor, verify, and report completion",
+		"Send merge_ready signals for verified sub-agents and self",
 	],
 	reviewer: [
 		"Read and understand the task description",
