@@ -9,7 +9,7 @@ import { execSync } from "node:child_process";
 import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
 import { emit } from "./events.ts";
-import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
+import { sendMail, checkMail, markRead, listMail, hasMergeReadyMail } from "./mail.ts";
 import { addMemory, listMemories, removeMemory } from "./memory.ts";
 import { DEFAULT_POWER_MODEL, DEFAULT_FAST_MODEL } from "./models.ts";
 import { startDashboard } from "./dashboard.ts";
@@ -630,9 +630,10 @@ program
 	.option("--all", "Merge all completed agent branches")
 	.option("--into <branch>", "Target branch (default: read from .grove/base-branch.txt)")
 	.option("--dry-run", "Check conflicts only, don't merge")
+	.option("--force", "Merge completed agents even without merge_ready signal")
 	.option("--review", "After merge --all, spawn a reviewer agent for integration review")
 	.action(
-		async (opts: { branch?: string; all?: boolean; into?: string; dryRun?: boolean; review?: boolean }) => {
+		async (opts: { branch?: string; all?: boolean; into?: string; dryRun?: boolean; force?: boolean; review?: boolean }) => {
 			if (!opts.branch && !opts.all) {
 				console.error("Specify --branch <name> or --all");
 				process.exit(1);
@@ -801,12 +802,34 @@ program
 				const alreadyMerged = new Set(listMergeQueue("merged").map((e) => e.branchName));
 
 				// Sort by completion time (oldest first = chronological order)
-				const toMerge = agents
+				const eligible = agents
 					.filter((a) => !alreadyMerged.has(a.branch))
 					.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
 
-				if (toMerge.length === 0) {
+				if (eligible.length === 0) {
 					console.log("No completed agents to merge (all already merged).");
+					return;
+				}
+
+				// Filter by merge_ready signal unless --force is set
+				let toMerge = eligible;
+				if (!opts.force) {
+					const ready = eligible.filter((a) => hasMergeReadyMail(a.name));
+					const skipped = eligible.length - ready.length;
+					if (skipped > 0) {
+						const skippedNames = eligible
+							.filter((a) => !hasMergeReadyMail(a.name))
+							.map((a) => a.name);
+						console.log(
+							`Skipping ${skipped} agent(s) without merge_ready signal: ${skippedNames.join(", ")}`,
+						);
+						console.log("Use --force to merge without merge_ready signal.");
+					}
+					toMerge = ready;
+				}
+
+				if (toMerge.length === 0) {
+					console.log("No merge-ready agents to merge. Use --force to override.");
 					return;
 				}
 

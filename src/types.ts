@@ -35,7 +35,7 @@ export interface Mail {
 	createdAt: string;
 }
 
-export type MailType = "status" | "question" | "result" | "error" | "done";
+export type MailType = "status" | "question" | "result" | "error" | "done" | "merge_ready";
 
 /** Task in the task queue */
 export interface Task {
