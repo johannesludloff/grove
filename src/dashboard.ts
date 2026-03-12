@@ -163,6 +163,7 @@ const STATUS_THEME: Record<AgentStatus, { icon: string; color: (s: string) => st
 function eventTypeColor(type: EventType): (s: string) => string {
 	if (type.startsWith("agent.")) return c.cyan;
 	if (type.startsWith("task.")) return c.yellow;
+	if (type.startsWith("watchdog.")) return c.red;
 	if (type === "mail.sent") return c.blue;
 	if (type === "memory.added") return c.magenta;
 	return c.gray;
@@ -187,6 +188,8 @@ function shortEventType(type: EventType): string {
 		"merge.completed": "mrg+",
 		"merge.conflict": "mrg!",
 		"merge.failed": "mrgx",
+		"watchdog.nudge": "nudg",
+		"watchdog.escalate": "esc!",
 	};
 	return map[type] ?? type.split(".").pop() ?? type;
 }

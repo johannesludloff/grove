@@ -203,6 +203,16 @@ const CAPABILITY_TIMEOUTS: Record<AgentCapability, number> = {
 /** Maximum number of automatic retries for failed agents */
 const MAX_RETRIES = 2;
 
+/** Graduated nudge thresholds (ms of silence before each stage triggers) */
+const NUDGE_THRESHOLDS = {
+	/** Stage 1: Gentle nudge to the agent */
+	gentle: 2 * 60_000,    // 2 minutes
+	/** Stage 2: Stronger nudge + PID liveness check */
+	firm: 4 * 60_000,      // 4 minutes
+	/** Stage 3: Escalate to orchestrator */
+	escalate: 6 * 60_000,  // 6 minutes
+};
+
 /** Default maximum spawn depth (orchestrator=0 → lead=1 → worker=2) */
 const MAX_SPAWN_DEPTH = 2;
 
@@ -456,6 +466,8 @@ export async function spawnAgent(opts: {
 	const timeoutMs = CAPABILITY_TIMEOUTS[opts.capability];
 	const HEARTBEAT_INTERVAL_MS = 60_000;
 	let lastHeartbeatAt = Date.now();
+	/** Tracks which nudge stage has been sent (0=none, 1=gentle, 2=firm, 3=escalated) */
+	let lastNudgeStage = 0;
 
 	const activityPoller = setInterval(async () => {
 		try {
@@ -472,6 +484,7 @@ export async function spawnAgent(opts: {
 			const now = Date.now();
 			if (size > lastKnownSize) {
 				lastKnownSize = size;
+				lastNudgeStage = 0; // Reset nudge escalation on activity
 				getDb()
 					.prepare("UPDATE agents SET last_activity_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')")
 					.run(opts.name);
@@ -504,14 +517,90 @@ export async function spawnAgent(opts: {
 					});
 				}
 			} else {
-				// Check timeout: has the agent been silent too long?
+				// Graduated stall detection: nudge → firm nudge → escalate → kill
 				const agent = getAgent(opts.name);
 				if (!agent || agent.status !== "running") return;
 				const activityTs = agent.lastActivityAt ?? agent.createdAt;
 				const silenceMs = now - new Date(activityTs.endsWith("Z") ? activityTs : activityTs + "Z").getTime();
+				const recipient = opts.parentName ?? "orchestrator";
+				const pidAlive = agent.pid ? isPidAlive(agent.pid) : false;
+
+				// Stage 1: Gentle nudge (2 min silence)
+				if (silenceMs >= NUDGE_THRESHOLDS.gentle && lastNudgeStage < 1) {
+					lastNudgeStage = 1;
+					// PID dead + no output = not stalled, just dead — skip nudges and let exit handler deal with it
+					if (!pidAlive) return;
+					sendMail({
+						from: "watchdog",
+						to: opts.name,
+						subject: `Nudge: ${opts.name} appears idle`,
+						body: `No output detected for ${Math.round(silenceMs / 60_000)} minutes. If you're blocked, consider trying a different approach or reporting status. Output size: ${lastKnownSize} bytes.`,
+						type: "status",
+					});
+					emit("watchdog.nudge", `Gentle nudge sent to "${opts.name}" after ${Math.round(silenceMs / 60_000)}min silence`, { agent: opts.name });
+				}
+
+				// Stage 2: Firm nudge + PID liveness check (4 min silence)
+				if (silenceMs >= NUDGE_THRESHOLDS.firm && lastNudgeStage < 2) {
+					lastNudgeStage = 2;
+					if (!pidAlive) {
+						// Process is dead but exit handler hasn't fired — mark failed now
+						clearInterval(activityPoller);
+						getDb()
+							.prepare("UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?")
+							.run(opts.name);
+						emit("agent.failed", `Agent "${opts.name}" process died (detected at firm nudge stage)`, { agent: opts.name });
+						sendMail({
+							from: "watchdog",
+							to: recipient,
+							subject: `Agent ${opts.name} process dead`,
+							body: `Process PID ${agent.pid} is no longer alive after ${Math.round(silenceMs / 60_000)} minutes of silence. Marked as failed.`,
+							type: "error",
+						});
+						return;
+					}
+					sendMail({
+						from: "watchdog",
+						to: opts.name,
+						subject: `Warning: ${opts.name} stalled for ${Math.round(silenceMs / 60_000)}min`,
+						body: `You have produced no output for ${Math.round(silenceMs / 60_000)} minutes. Process is alive (PID ${agent.pid}). If you are stuck, commit partial work and report your status. You will be stopped if inactivity continues.`,
+						type: "status",
+					});
+					emit("watchdog.nudge", `Firm nudge sent to "${opts.name}" — PID alive, ${Math.round(silenceMs / 60_000)}min silent`, { agent: opts.name });
+				}
+
+				// Stage 3: Escalate to orchestrator (6 min silence)
+				if (silenceMs >= NUDGE_THRESHOLDS.escalate && lastNudgeStage < 3) {
+					lastNudgeStage = 3;
+					if (!pidAlive) {
+						// Process died between firm nudge and escalation
+						clearInterval(activityPoller);
+						getDb()
+							.prepare("UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?")
+							.run(opts.name);
+						emit("agent.failed", `Agent "${opts.name}" process died (detected at escalation stage)`, { agent: opts.name });
+						sendMail({
+							from: "watchdog",
+							to: recipient,
+							subject: `Agent ${opts.name} process dead`,
+							body: `Process PID ${agent.pid} died after ${Math.round(silenceMs / 60_000)} minutes of silence. Marked as failed.`,
+							type: "error",
+						});
+						return;
+					}
+					sendMail({
+						from: "watchdog",
+						to: recipient,
+						subject: `Escalation: ${opts.name} stalled ${Math.round(silenceMs / 60_000)}min`,
+						body: `Agent "${opts.name}" (${opts.capability}) has been silent for ${Math.round(silenceMs / 60_000)} minutes despite nudges. Process PID ${agent.pid} is still alive. Task: ${opts.taskId}. Consider stopping and retrying, or allow more time.`,
+						type: "error",
+					});
+					emit("watchdog.escalate", `Escalated stall for "${opts.name}" to ${recipient} after ${Math.round(silenceMs / 60_000)}min`, { agent: opts.name });
+				}
+
+				// Final stage: Kill after capability timeout (existing behavior)
 				if (silenceMs > timeoutMs) {
 					clearInterval(activityPoller);
-					// Kill the process
 					if (agent.pid) {
 						try { process.kill(agent.pid, "SIGTERM"); } catch { /* already gone */ }
 					}
@@ -519,12 +608,11 @@ export async function spawnAgent(opts: {
 						.prepare("UPDATE agents SET status = 'failed', updated_at = datetime('now') WHERE name = ?")
 						.run(opts.name);
 					emit("agent.failed", `Agent "${opts.name}" timed out after ${timeoutMs / 60_000}min with no output`, { agent: opts.name });
-					const recipient = opts.parentName ?? "orchestrator";
 					sendMail({
-						from: opts.name,
+						from: "watchdog",
 						to: recipient,
 						subject: `Agent ${opts.name} timed out`,
-						body: `Auto-stopped after ${timeoutMs / 60_000} minutes with no output. Capability: ${opts.capability}.`,
+						body: `Auto-stopped after ${timeoutMs / 60_000} minutes with no output. Capability: ${opts.capability}. All ${lastNudgeStage} nudge stages were sent before termination.`,
 						type: "error",
 					});
 					// Update task — only if no other agents for this task are still active
