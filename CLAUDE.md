@@ -5,6 +5,10 @@
 
 NEVER use Read, Glob, Grep, or Bash to explore project files yourself. ALL exploration must go through scout agents.
 
+If you find anything that did not work correctly in our workflow that leads to a failed task, report it immediately and create a task on the task list to fix the issue. 
+
+Do not stop working if there are still tasks on the list. Always spawn agents to handle tasks and keep the workflow moving.
+
 ## Core Rule
 
 When the user gives you a task:
