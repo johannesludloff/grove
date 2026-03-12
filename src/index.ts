@@ -20,6 +20,7 @@ import { prime } from "./prime.ts";
 import { installHooks, uninstallHooks, statusHooks } from "./hooks.ts";
 import { collectBenchmarks, storeBenchmarkRun, getPreviousRun, displayReport, listRuns } from "./benchmark.ts";
 import { startWatchdog, stopWatchdog, isWatchdogRunning } from "./watchdog.ts";
+import { runHealthChecks, formatHealthReport } from "./health.ts";
 import type { AgentCapability, MailType, TaskStatus, MergeTier } from "./types.ts";
 import type { MemoryType } from "./memory.ts";
 
@@ -1185,6 +1186,37 @@ program
 		for (const row of toolRows) {
 			const pct = (((row.total - row.failures) / row.total) * 100).toFixed(1);
 			console.log(`  ${row.tool_name.padEnd(30)} ${String(row.total).padStart(6)} ${String(row.failures).padStart(6)} ${(pct + "%").padStart(9)}`);
+		}
+	});
+
+// ── grove health ────────────────────────────────────────────────────────
+program
+	.command("health")
+	.description("Run workflow health checks and auto-create tasks for detected problems")
+	.option("--no-auto-fix", "Report problems without creating remediation tasks")
+	.option("--notify", "Send summary mail to orchestrator")
+	.option("--json", "Output results as JSON")
+	.action((opts: { autoFix?: boolean; notify?: boolean; json?: boolean }) => {
+		// Reconcile zombies first so status is accurate
+		reconcileZombies();
+
+		const autoFix = opts.autoFix !== false;
+		const problems = runHealthChecks({ autoFix });
+
+		if (opts.json) {
+			console.log(JSON.stringify({ problems, count: problems.length }, null, 2));
+		} else {
+			console.log(formatHealthReport(problems));
+		}
+
+		if (opts.notify && problems.length > 0) {
+			sendMail({
+				from: "health-check",
+				to: "orchestrator",
+				subject: `Health: ${problems.length} problem(s) detected`,
+				body: formatHealthReport(problems),
+				type: "status",
+			});
 		}
 	});
 

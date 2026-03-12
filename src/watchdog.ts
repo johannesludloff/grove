@@ -3,6 +3,7 @@
 import { listAgents, isPidAlive, reconcileZombies } from "./agent.ts";
 import { sendMail } from "./mail.ts";
 import { emit } from "./events.ts";
+import { runHealthChecks, formatHealthReport } from "./health.ts";
 
 /** Watchdog check interval in ms (30 seconds) */
 const CHECK_INTERVAL_MS = 30_000;
@@ -143,6 +144,22 @@ function runHealthCheck(): void {
 	if (running.length > 0 && now - lastSummaryAt >= SUMMARY_INTERVAL_MS) {
 		sendHealthSummary(running.length, matureStalled.length);
 		lastSummaryAt = now;
+
+		// 6. Run workflow health checks during summary cycle
+		try {
+			const problems = runHealthChecks({ autoFix: true });
+			if (problems.length > 0) {
+				sendMail({
+					from: "watchdog",
+					to: "orchestrator",
+					subject: `Health: ${problems.length} workflow problem(s) detected`,
+					body: formatHealthReport(problems),
+					type: problems.some((p) => p.severity === "error") ? "error" : "status",
+				});
+			}
+		} catch {
+			// Health checks must never crash the watchdog
+		}
 	}
 
 	// 7. Clean up tracking for agents no longer running
