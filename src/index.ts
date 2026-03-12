@@ -988,6 +988,12 @@ cronCmd
 			command: "grove mail check orchestrator",
 			description: "Grove: reactive mail check",
 		}, null, 2));
+		console.log("\n4. CronCreate — workflow health check:");
+		console.log(JSON.stringify({
+			schedule: "every 5 minutes",
+			command: "grove health --notify",
+			description: "Grove: workflow health check with auto-fix",
+		}, null, 2));
 		console.log("\nThe orchestrator's SessionStart hook should call these automatically.");
 	});
 

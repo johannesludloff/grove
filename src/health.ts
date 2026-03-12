@@ -10,7 +10,7 @@ const STALE_AGENT_THRESHOLD_MS = 10 * 60_000;
 
 /** A detected health problem */
 export interface HealthProblem {
-	type: "stale-agent" | "merge-conflict" | "merge-failed" | "orphaned-task";
+	type: "stale-agent" | "merge-conflict" | "merge-failed" | "orphaned-task" | "unmerged-agents";
 	severity: "warning" | "error";
 	summary: string;
 	detail: string;
@@ -25,6 +25,7 @@ export function runHealthChecks(opts?: { autoFix?: boolean }): HealthProblem[] {
 	problems.push(...checkStaleAgents(autoFix));
 	problems.push(...checkMergeProblems(autoFix));
 	problems.push(...checkOrphanedTasks(autoFix));
+	problems.push(...checkUnmergedAgents());
 
 	return problems;
 }
@@ -72,14 +73,21 @@ function checkStaleAgents(autoFix: boolean): HealthProblem[] {
 	return problems;
 }
 
-/** Detect merge conflicts and failures in the merge queue */
+/** Detect merge conflicts and failures in the merge queue (deduped by branch+status) */
 function checkMergeProblems(autoFix: boolean): HealthProblem[] {
 	const problems: HealthProblem[] = [];
 
 	const conflicts = listMergeQueue("conflict");
 	const failures = listMergeQueue("failed");
 
+	// Dedup by branch+status — same branch may have multiple merge queue entries from retries
+	const seen = new Set<string>();
+
 	for (const entry of conflicts) {
+		const key = `${entry.branchName}:conflict`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+
 		const taskId = `fix-merge-conflict-${entry.agentName}`;
 
 		let createdTaskId: string | null = null;
@@ -102,6 +110,10 @@ function checkMergeProblems(autoFix: boolean): HealthProblem[] {
 	}
 
 	for (const entry of failures) {
+		const key = `${entry.branchName}:failed`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+
 		const taskId = `fix-merge-failed-${entry.agentName}`;
 
 		let createdTaskId: string | null = null;
@@ -120,6 +132,32 @@ function checkMergeProblems(autoFix: boolean): HealthProblem[] {
 			summary: `Merge failed for ${entry.branchName}`,
 			detail: `Agent: ${entry.agentName}, task: ${entry.taskId}`,
 			taskId: createdTaskId,
+		});
+	}
+
+	return problems;
+}
+
+/** Detect completed agents that haven't been merged yet */
+function checkUnmergedAgents(): HealthProblem[] {
+	const problems: HealthProblem[] = [];
+	const completed = listAgents("completed");
+
+	if (completed.length === 0) return problems;
+
+	// Check which completed agents have already been merged via merge_queue
+	const mergedEntries = listMergeQueue("merged");
+	const mergedBranches = new Set(mergedEntries.map((e) => e.branchName));
+
+	const unmerged = completed.filter((a) => !mergedBranches.has(a.branch));
+
+	if (unmerged.length > 0) {
+		problems.push({
+			type: "unmerged-agents",
+			severity: "warning",
+			summary: `${unmerged.length} completed agent(s) awaiting merge`,
+			detail: `Agents: ${unmerged.map((a) => a.name).join(", ")}. Run \`grove merge --all\` to integrate.`,
+			taskId: null,
 		});
 	}
 
