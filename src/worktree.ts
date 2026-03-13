@@ -97,6 +97,31 @@ export async function listWorktrees(): Promise<string[]> {
 	return worktrees;
 }
 
+/** Check if the current directory is inside a git repository */
+export async function isGitRepo(): Promise<boolean> {
+	const proc = Bun.spawn(["git", "rev-parse", "--git-dir"], {
+		cwd: process.cwd(),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	return (await proc.exited) === 0;
+}
+
+/** Initialize a new git repository in the current directory */
+export async function initGitRepo(): Promise<void> {
+	const proc = Bun.spawn(["git", "init"], {
+		cwd: process.cwd(),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	const exitCode = await proc.exited;
+	if (exitCode !== 0) {
+		const stderr = await new Response(proc.stderr).text();
+		throw new Error(`Failed to initialize git repository: ${stderr.trim()}`);
+	}
+}
+
 /** Get the current branch name */
 export async function getCurrentBranch(): Promise<string> {
 	const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
