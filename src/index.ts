@@ -3,7 +3,7 @@
 
 import { Command } from "commander";
 import { closeDb, getDb, groveDir, initDb } from "./db.ts";
-import { getCurrentBranch } from "./worktree.ts";
+import { getCurrentBranch, isGitRepo, initGitRepo } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks } from "./tasks.ts";
@@ -38,6 +38,22 @@ program
 		if (existsSync(groveDir())) {
 			console.log("Grove already initialized.");
 			return;
+		}
+
+		// Auto-initialize git if not in a git repository
+		if (!(await isGitRepo())) {
+			console.log("No git repository detected — running git init...");
+			await initGitRepo();
+
+			// Create an initial empty commit so HEAD exists (required for worktrees)
+			const commitProc = Bun.spawn(
+				["git", "commit", "--allow-empty", "-m", "Initial commit (grove init)"],
+				{ cwd: process.cwd(), stdout: "pipe", stderr: "pipe" },
+			);
+			if ((await commitProc.exited) !== 0) {
+				const stderr = await new Response(commitProc.stderr).text();
+				throw new Error(`Failed to create initial commit: ${stderr.trim()}`);
+			}
 		}
 
 		initDb();
