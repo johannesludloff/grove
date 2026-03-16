@@ -7,6 +7,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { syncClaudeMd } from "./claude-md.ts";
 
 /** Grove source repo root (parent of src/) */
 export const GROVE_ROOT = join(import.meta.dir, "..");
@@ -112,9 +113,9 @@ export function maybeNotifyUpdate(): void {
 }
 
 /**
- * Full update: git pull, bun install, bun link
+ * Full update: git pull, bun install, bun link, sync CLAUDE.md
  */
-export function runUpdate(): void {
+export async function runUpdate(): Promise<void> {
 	console.log(`Updating Grove from ${GROVE_ROOT}...\n`);
 
 	try {
@@ -162,4 +163,11 @@ export function runUpdate(): void {
 
 	// Clear update cache
 	writeCache({ lastCheck: Date.now(), updatesAvailable: false });
+
+	// Sync CLAUDE.md in the current project if it has a .grove/ directory
+	const cwd = process.cwd();
+	if (existsSync(join(cwd, ".grove"))) {
+		await syncClaudeMd(cwd);
+		console.log("Synced CLAUDE.md in current project");
+	}
 }

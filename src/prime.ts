@@ -1,8 +1,9 @@
 /** Orchestrator context output — for Claude Code SessionStart hook injection */
 
 import { existsSync } from "node:fs";
-import { listAgents } from "./agent.ts";
+import { listAgents, reconcileZombies } from "./agent.ts";
 import { groveDir } from "./db.ts";
+import { checkMail } from "./mail.ts";
 import { listTasks } from "./tasks.ts";
 
 /** Write orchestrator context markdown to stdout */
@@ -59,6 +60,31 @@ export function prime(): void {
 		out.write("## Active State\n\n");
 		out.write("_Grove not initialized in this directory._\n\n");
 		return;
+	}
+
+	// --- Reconcile stale state from previous sessions ---
+
+	// 1. Reconcile zombie agents (running/spawning but PID dead)
+	const zombies = reconcileZombies();
+	if (zombies.length > 0) {
+		out.write(`⚠ Reconciled ${zombies.length} zombie agent(s) from previous session: ${zombies.join(", ")}\n\n`);
+	}
+
+	// 2. Detect orphaned in_progress tasks with no active agents
+	const inProgressTasks = listTasks("in_progress");
+	const activeAgents = listAgents("running").concat(listAgents("spawning"));
+	const activeTaskIds = new Set(activeAgents.map((a) => a.taskId));
+	const orphanedTasks = inProgressTasks.filter((t) => !activeTaskIds.has(t.taskId));
+	if (orphanedTasks.length > 0) {
+		const ids = orphanedTasks.map((t) => t.taskId).join(", ");
+		out.write(`⚠ ${orphanedTasks.length} task(s) stuck in_progress with no active agents: ${ids}\n`);
+		out.write("Consider: `grove task update <id> -s failed` or re-spawn agents.\n\n");
+	}
+
+	// 3. Surface unread orchestrator mail
+	const unread = checkMail("orchestrator");
+	if (unread.length > 0) {
+		out.write(`📬 ${unread.length} unread message(s) — run \`grove mail check orchestrator\` to read\n\n`);
 	}
 
 	out.write("## Active State\n\n");
