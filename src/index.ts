@@ -25,13 +25,14 @@ import { writeCheckpoint, readCheckpoint, autoCheckpointFromTool } from "./check
 import type { AgentCapability, MailType, TaskStatus, MergeTier } from "./types.ts";
 import type { MemoryType } from "./memory.ts";
 import type { Checkpoint } from "./checkpoint.ts";
+import { maybeNotifyUpdate, runUpdate, getGroveVersion } from "./update.ts";
 
 const program = new Command();
 
 program
 	.name("grove")
 	.description("Windows-native multi-agent orchestrator for Claude Code")
-	.version("0.1.0");
+	.version(getGroveVersion());
 
 // ── grove init ──────────────────────────────────────────────────────────
 program
@@ -1542,11 +1543,26 @@ program
 		process.exit(0);
 	});
 
+// ── grove update ────────────────────────────────────────────────────────
+program
+	.command("update")
+	.description("Update Grove to the latest version from GitHub")
+	.action(() => {
+		runUpdate();
+	});
+
+// Auto-update check (non-blocking, cached once per hour)
+program.hook("preAction", (_, actionCommand) => {
+	const name = actionCommand.name();
+	if (["update", "prime", "guard", "session-end", "hooks"].includes(name)) return;
+	maybeNotifyUpdate();
+});
+
 // ── Run ─────────────────────────────────────────────────────────────────
 program.hook("postAction", (_, actionCommand) => {
 	// Don't close DB for long-running commands that poll, or for commands that don't use DB
 	const name = actionCommand.name();
-	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric" || name === "spawn" || name === "checkpoint") return;
+	if (name === "dashboard" || name === "feed" || name === "prime" || name === "hooks" || name === "guard" || name === "tool-metric" || name === "spawn" || name === "checkpoint" || name === "update") return;
 	closeDb();
 });
 
