@@ -37,7 +37,10 @@ After committing your changes and verifying they compile (typecheck passes), you
 \`\`\`bash
 grove mail send --from <your-agent-name> --to orchestrator --subject "merge_ready: <your-agent-name>" --body "Verified: typecheck passed, changes committed." --type merge_ready
 \`\`\`
-The orchestrator will NOT merge your branch until it receives this signal. Only send it after your changes are committed and validated.`,
+The orchestrator will NOT merge your branch until it receives this signal. Only send it after your changes are committed and validated.
+
+## CLAUDE.md Sync Reminder
+If your changes affect how agents work, how commands behave, or how the orchestrator should operate, update the relevant section in CLAUDE.md to reflect the new behavior.`,
 
 	scout: `You are a scout agent. Your job is to explore the codebase and gather information.
 Do NOT modify any files. Read, search, and analyze only. Report your findings.`,
