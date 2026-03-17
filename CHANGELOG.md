@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-17
+
+### Added
+
+#### Agent Lifecycle & Reliability
+- Background watchdog for proactive agent health monitoring (stall detection, nudges, escalation)
+- 60-second agent heartbeat with last-tool context for liveness tracking
+- Agent hierarchy enforcement — leads can only spawn scouts/builders/reviewers
+- Structured startup beacon injected into agent prompts (timestamp, depth, parent, capabilities)
+- `GROVE_AGENT` env guard to isolate hooks from user sessions
+- Per-capability PreToolUse guards for agent worktree safety
+- Agent spawn now waits for child process exit and propagates signals correctly
+
+#### Task Management
+- Task status tracking with `grove task update` CLI command
+- Auto-complete tasks when agents finish (with multi-agent safety guards)
+- Auto-archive completed/failed tasks during `grove clean`
+- Reactive mail check cron (every 2 minutes) for faster agent communication
+
+#### Session Resume & Atomic Checkout
+- Store Claude Code session IDs and support `--resume` on agent restart
+- Atomic task checkout with `locked_by`/`locked_at` columns, `checkoutTask`/`releaseTask` functions
+- Auto-checkout on spawn, auto-release on stop/complete/fail/timeout
+
+#### Goal Ancestry
+- Include parent task chain (goal ancestry) in agent prompts for better context
+
+#### Agent Checkpoints
+- Checkpoint support for long-running agents to save intermediate progress
+
+#### Merge-Ready Protocol
+- Agents send explicit `merge_ready` mail signal after commit + typecheck verification
+- Orchestrator only merges branches that have received the merge_ready signal
+
+#### AI Merge Resolution Enhancements
+- Post-merge typecheck validation (`tsc --noEmit` after all branches merged)
+- `--review` flag spawns integration-reviewer agent to check logical coherence
+- CLAUDE.md sync guard warns when grove behavior changes without CLAUDE.md update
+
+#### Overlay Templates
+- Spec file templates for structured agent task descriptions
+- File scope ownership to prevent parallel builder merge conflicts
+
+#### Dashboard & CLI Improvements
+- Redesigned CLAUDE.md with comprehensive workflow instructions and command reference
+
+### Fixed
+- Resolved agent lifecycle race condition between poller, `proc.exited`, and watchdog
+- Made watchdog quieter and more tolerant of normal agent pauses
+- Mark doneMail as read in SessionEnd hook to prevent duplicate processing
+- Mark completion mail as read in `reconcileZombies`
+- Corrected inverted assertion in orchestrator hierarchy test
+- Removed unused imports and variables in `watchdog.ts`
+- Auto-commit grove state files before merge to prevent dirty tree errors
+
 ## [0.3.0] - 2026-03-09
 
 ### Added
