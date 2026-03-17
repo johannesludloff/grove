@@ -154,6 +154,13 @@ function ensureTables(db: Database): void {
 	} catch {
 		// Column already exists — ignore
 	}
+
+	// Migrate: add session_id column to agents for --resume support
+	try {
+		db.exec("ALTER TABLE agents ADD COLUMN session_id TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
 }
 
 /** Initialize the database with all tables */

@@ -7,7 +7,7 @@ import { getCurrentBranch } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks } from "./tasks.ts";
-import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
+import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive, getAgentSessionId } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail } from "./mail.ts";
 import { addMemory, listMemories, removeMemory } from "./memory.ts";
@@ -253,10 +253,11 @@ program
 	.option("--depth <n>", "Explicit spawn depth (auto-derived from parent if omitted)")
 	.option("--max-depth <n>", "Maximum spawn depth (default: 2)")
 	.option("--max-agents <n>", "Maximum active sub-agents per lead (default: 5, 0=unlimited)")
+	.option("--resume-from <agent-name>", "Resume from a previous agent's Claude Code session")
 	.action(
 		async (
 			taskId: string,
-			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string; maxAgents?: string },
+			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string; maxAgents?: string; resumeFrom?: string },
 		) => {
 			const task = getTask(taskId);
 			if (!task) {
@@ -265,6 +266,18 @@ program
 			}
 
 			const baseBranch = (await Bun.file(`${groveDir()}/base-branch.txt`).text()).trim();
+
+			// Resolve --resume-from: look up previous agent's session ID
+			let resumeSessionId: string | undefined;
+			if (opts.resumeFrom) {
+				const sessionId = getAgentSessionId(opts.resumeFrom);
+				if (!sessionId) {
+					console.error(`No session ID found for agent "${opts.resumeFrom}". The agent may not have recorded one.`);
+					process.exit(1);
+				}
+				resumeSessionId = sessionId;
+				console.log(`Resuming from session: ${resumeSessionId} (agent: ${opts.resumeFrom})`);
+			}
 
 			const result = await spawnAgent({
 				name: opts.name,
@@ -277,6 +290,7 @@ program
 				depth: opts.depth ? Number(opts.depth) : undefined,
 				maxDepth: opts.maxDepth ? Number(opts.maxDepth) : undefined,
 				maxAgents: opts.maxAgents ? Number(opts.maxAgents) : undefined,
+				resumeSessionId,
 			});
 
 			// Start watchdog on first spawn if not already running
@@ -1299,6 +1313,12 @@ program
 		if (!agent) {
 			// Not a grove agent session — ignore
 			process.exit(0);
+		}
+
+		// Store session ID from Claude Code if we have one and agent doesn't yet
+		if (data.session_id && !agent.sessionId) {
+			const db2 = getDb();
+			db2.prepare("UPDATE agents SET session_id = ? WHERE name = ?").run(data.session_id, agent.name);
 		}
 
 		// Only act on agents still marked as running/spawning
