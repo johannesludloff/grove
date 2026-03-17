@@ -14,6 +14,8 @@ export type EventType =
 	| "task.failed"
 	| "task.unblocked"
 	| "task.archived"
+	| "task.checkout"
+	| "task.release"
 	| "mail.sent"
 	| "memory.added"
 	| "merge.enqueued"

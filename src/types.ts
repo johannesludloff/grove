@@ -47,6 +47,8 @@ export interface Task {
 	assignedTo: string | null;
 	parentTaskId: string | null;
 	retryCount: number;
+	lockedBy: string | null;
+	lockedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 }

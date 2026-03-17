@@ -93,6 +93,8 @@ function ensureTables(db: Database): void {
 			status TEXT NOT NULL DEFAULT 'pending',
 			assigned_to TEXT,
 			retry_count INTEGER NOT NULL DEFAULT 0,
+			locked_by TEXT,
+			locked_at TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
@@ -166,9 +168,14 @@ function ensureTables(db: Database): void {
 		// Column already exists — ignore
 	}
 
-	// Migrate: add parent_task_id column to tasks if it doesn't exist yet
+	// Migrate: add locked_by and locked_at columns to tasks if they don't exist yet
 	try {
-		db.exec("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT");
+		db.exec("ALTER TABLE tasks ADD COLUMN locked_by TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN locked_at TEXT");
 	} catch {
 		// Column already exists — ignore
 	}

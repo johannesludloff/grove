@@ -5,7 +5,7 @@ import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
-import { getTask, getGoalAncestry, incrementRetryCount, updateTask } from "./tasks.ts";
+import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
@@ -374,6 +374,15 @@ export async function spawnAgent(opts: {
 		checkDuplicateLead(opts.taskId);
 	}
 
+	// Atomic task checkout: prevent double-work on the same task
+	const checkout = checkoutTask(opts.taskId, opts.name);
+	if (!checkout.success) {
+		throw new Error(
+			`Task "${opts.taskId}" is already checked out by agent "${checkout.lockedBy}". ` +
+			`Cannot spawn "${opts.name}" — another agent owns this task.`,
+		);
+	}
+
 	// Enforce depth limit
 	const maxDepth = opts.maxDepth ?? MAX_SPAWN_DEPTH;
 	if (depth > maxDepth) {
@@ -505,13 +514,14 @@ export async function spawnAgent(opts: {
 			opts.name,
 		);
 	} catch (err) {
-		// Rollback: clean up DB entry and worktree on spawn failure
+		// Rollback: clean up DB entry, worktree, and task lock on spawn failure
 		if (dbInserted) {
 			try { db.prepare("DELETE FROM agents WHERE name = ?").run(opts.name); } catch { /* best-effort */ }
 		}
 		if (worktreeCreated) {
 			try { await removeWorktree(opts.name); } catch { /* best-effort */ }
 		}
+		try { releaseTask(opts.taskId); } catch { /* best-effort */ }
 		throw err;
 	}
 
@@ -691,6 +701,8 @@ export async function spawnAgent(opts: {
 						.get(opts.taskId, opts.name) as { count: number };
 					if (remainingTimeout.count === 0) {
 						updateTask(opts.taskId, { status: "failed" });
+						// Release task lock when no more agents are working on it
+						try { releaseTask(opts.taskId); } catch { /* task may not exist */ }
 					}
 				}
 			}
@@ -757,6 +769,8 @@ export async function spawnAgent(opts: {
 			updateTask(opts.taskId, {
 				status: status === "completed" ? "completed" : "failed",
 			});
+			// Release task lock when no more agents are working on it
+			try { releaseTask(opts.taskId); } catch { /* task may not exist */ }
 		}
 
 		// Auto-retry on failure
@@ -1439,6 +1453,8 @@ export async function stopAgent(name: string): Promise<void> {
 		.get(agent.taskId, name) as { count: number };
 	if (remainingStopped.count === 0) {
 		updateTask(agent.taskId, { status: "failed" });
+		// Release task lock when no more agents are working on it
+		try { releaseTask(agent.taskId); } catch { /* task may not exist */ }
 	}
 
 	// Cascade stop: stop all running children of this agent

@@ -6,7 +6,7 @@ import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch, isGitRepo, initGitRepo } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, getTaskDependencies } from "./tasks.ts";
+import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, checkoutTask, releaseTask } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail, hasMergeReadyMail } from "./mail.ts";
@@ -180,10 +180,48 @@ taskCmd
 		}
 		for (const t of tasks) {
 			const assignee = t.assignedTo ? ` → ${t.assignedTo}` : "";
-			const deps = getTaskDependencies(t.taskId);
-			const depsNote = deps.length ? ` (depends on: ${deps.join(", ")})` : "";
-			console.log(`  [${t.status}] ${t.taskId}: ${t.title}${assignee}${depsNote}`);
+			const lock = t.lockedBy ? ` 🔒${t.lockedBy}` : "";
+			console.log(`  [${t.status}] ${t.taskId}: ${t.title}${assignee}${lock}`);
 		}
+	});
+
+taskCmd
+	.command("checkout")
+	.description("Lock a task to an agent (prevents double-work)")
+	.argument("<task-id>", "Task ID to check out")
+	.requiredOption("--agent <name>", "Agent name to lock the task to")
+	.action((taskId: string, opts: { agent: string }) => {
+		const task = getTask(taskId);
+		if (!task) {
+			console.error(`Task "${taskId}" not found.`);
+			process.exit(1);
+		}
+		const result = checkoutTask(taskId, opts.agent);
+		if (result.success) {
+			console.log(`Task "${taskId}" checked out by "${opts.agent}".`);
+		} else {
+			console.error(`Task "${taskId}" is already locked by "${result.lockedBy}".`);
+			process.exit(1);
+		}
+	});
+
+taskCmd
+	.command("release")
+	.description("Release the lock on a task (manual unlock)")
+	.argument("<task-id>", "Task ID to release")
+	.action((taskId: string) => {
+		const task = getTask(taskId);
+		if (!task) {
+			console.error(`Task "${taskId}" not found.`);
+			process.exit(1);
+		}
+		if (!task.lockedBy) {
+			console.log(`Task "${taskId}" is not locked.`);
+			return;
+		}
+		const holder = task.lockedBy;
+		releaseTask(taskId);
+		console.log(`Task "${taskId}" released (was locked by "${holder}").`);
 	});
 
 // ── grove spawn ─────────────────────────────────────────────────────────

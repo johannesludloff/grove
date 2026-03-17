@@ -56,6 +56,8 @@ export function createTask(opts: {
 		assignedTo: null,
 		parentTaskId: opts.parentTaskId ?? null,
 		retryCount: 0,
+		lockedBy: null,
+		lockedAt: null,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 	};
@@ -71,7 +73,7 @@ export function getTask(taskId: string): Task | null {
 	const row = db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        parent_task_id as parentTaskId, retry_count as retryCount,
+			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
 			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks WHERE task_id = ?`,
 		)
@@ -129,7 +131,7 @@ export function listTasks(status?: TaskStatus): Task[] {
 	return db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        parent_task_id as parentTaskId, retry_count as retryCount,
+			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
 			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks ${where} ORDER BY created_at DESC`,
 		)
@@ -204,66 +206,70 @@ export function incrementRetryCount(taskId: string): number {
 	return row?.retry_count ?? 0;
 }
 
-/** Check if any of the given dependency task IDs are not yet completed */
-function hasUnresolvedDependencies(depIds: string[]): boolean {
+/** Result of a checkout attempt */
+export interface CheckoutResult {
+	success: boolean;
+	/** Name of the agent that holds the lock (if checkout failed) */
+	lockedBy?: string;
+}
+
+/**
+ * Atomically check out a task for an agent.
+ * If the task is unlocked, locks it to the agent and returns success.
+ * If already locked by another agent, returns failure with the lock holder.
+ */
+export function checkoutTask(taskId: string, agentName: string): CheckoutResult {
 	const db = getDb();
-	for (const depId of depIds) {
-		const dep = db
-			.prepare("SELECT status FROM tasks WHERE task_id = ?")
-			.get(depId) as { status: string } | null;
-		if (!dep || dep.status !== "completed") {
-			return true;
+
+	// Use a transaction for atomicity
+	const result = db.transaction(() => {
+		const row = db
+			.prepare("SELECT locked_by, locked_at FROM tasks WHERE task_id = ?")
+			.get(taskId) as { locked_by: string | null; locked_at: string | null } | null;
+
+		if (!row) {
+			throw new Error(`Task "${taskId}" not found`);
 		}
-	}
-	return false;
-}
 
-/** When a task completes, unblock any tasks that depended on it */
-function unblockDependents(completedTaskId: string): void {
-	const db = getDb();
-
-	// Find all blocked tasks that depend on the completed task
-	const dependents = db
-		.prepare(
-			`SELECT DISTINCT td.task_id FROM task_dependencies td
-			 JOIN tasks t ON t.task_id = td.task_id
-			 WHERE td.depends_on = ? AND t.status = 'blocked'`,
-		)
-		.all(completedTaskId) as { task_id: string }[];
-
-	for (const { task_id: depTaskId } of dependents) {
-		// Check if ALL dependencies of this task are now completed
-		const unmetDeps = db
-			.prepare(
-				`SELECT td.depends_on FROM task_dependencies td
-				 JOIN tasks t ON t.task_id = td.depends_on
-				 WHERE td.task_id = ? AND t.status != 'completed'`,
-			)
-			.all(depTaskId) as { depends_on: string }[];
-
-		if (unmetDeps.length === 0) {
-			db.prepare(
-				"UPDATE tasks SET status = 'pending', updated_at = datetime('now') WHERE task_id = ?",
-			).run(depTaskId);
-			emit("task.unblocked", `Task "${depTaskId}" unblocked (all dependencies met)`);
+		// Already locked by another agent
+		if (row.locked_by && row.locked_by !== agentName) {
+			return { success: false, lockedBy: row.locked_by };
 		}
+
+		// Lock it (or re-lock if same agent)
+		db.prepare(
+			`UPDATE tasks SET locked_by = ?, locked_at = datetime('now'), updated_at = datetime('now') WHERE task_id = ?`,
+		).run(agentName, taskId);
+
+		return { success: true };
+	})();
+
+	if (result.success) {
+		emit("task.checkout", `Task "${taskId}" checked out by "${agentName}"`);
 	}
+
+	return result;
 }
 
-/** Get the dependency task IDs for a given task */
-export function getTaskDependencies(taskId: string): string[] {
+/**
+ * Release the lock on a task, making it available for other agents.
+ * Can be called by any agent or manually — always clears the lock.
+ */
+export function releaseTask(taskId: string): void {
 	const db = getDb();
-	const rows = db
-		.prepare("SELECT depends_on FROM task_dependencies WHERE task_id = ?")
-		.all(taskId) as { depends_on: string }[];
-	return rows.map((r) => r.depends_on);
-}
+	const row = db
+		.prepare("SELECT locked_by FROM tasks WHERE task_id = ?")
+		.get(taskId) as { locked_by: string | null } | null;
 
-/** Get tasks that depend on a given task */
-export function getTaskDependents(taskId: string): string[] {
-	const db = getDb();
-	const rows = db
-		.prepare("SELECT task_id FROM task_dependencies WHERE depends_on = ?")
-		.all(taskId) as { task_id: string }[];
-	return rows.map((r) => r.task_id);
+	if (!row) {
+		throw new Error(`Task "${taskId}" not found`);
+	}
+
+	db.prepare(
+		`UPDATE tasks SET locked_by = NULL, locked_at = NULL, updated_at = datetime('now') WHERE task_id = ?`,
+	).run(taskId);
+
+	if (row.locked_by) {
+		emit("task.release", `Task "${taskId}" lock released (was held by "${row.locked_by}")`);
+	}
 }
