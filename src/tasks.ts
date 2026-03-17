@@ -25,6 +25,8 @@ export function createTask(opts: {
 		status: "pending",
 		assignedTo: null,
 		retryCount: 0,
+		lockedBy: null,
+		lockedAt: null,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 	};
@@ -40,7 +42,8 @@ export function getTask(taskId: string): Task | null {
 	const row = db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        retry_count as retryCount, created_at as createdAt, updated_at as updatedAt
+			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
+			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks WHERE task_id = ?`,
 		)
 		.get(taskId) as Task | null;
@@ -92,7 +95,8 @@ export function listTasks(status?: TaskStatus): Task[] {
 	return db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        retry_count as retryCount, created_at as createdAt, updated_at as updatedAt
+			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
+			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks ${where} ORDER BY created_at DESC`,
 		)
 		.all(...params) as Task[];
@@ -138,4 +142,72 @@ export function incrementRetryCount(taskId: string): number {
 		.get(taskId) as { retry_count: number } | null;
 
 	return row?.retry_count ?? 0;
+}
+
+/** Result of a checkout attempt */
+export interface CheckoutResult {
+	success: boolean;
+	/** Name of the agent that holds the lock (if checkout failed) */
+	lockedBy?: string;
+}
+
+/**
+ * Atomically check out a task for an agent.
+ * If the task is unlocked, locks it to the agent and returns success.
+ * If already locked by another agent, returns failure with the lock holder.
+ */
+export function checkoutTask(taskId: string, agentName: string): CheckoutResult {
+	const db = getDb();
+
+	// Use a transaction for atomicity
+	const result = db.transaction(() => {
+		const row = db
+			.prepare("SELECT locked_by, locked_at FROM tasks WHERE task_id = ?")
+			.get(taskId) as { locked_by: string | null; locked_at: string | null } | null;
+
+		if (!row) {
+			throw new Error(`Task "${taskId}" not found`);
+		}
+
+		// Already locked by another agent
+		if (row.locked_by && row.locked_by !== agentName) {
+			return { success: false, lockedBy: row.locked_by };
+		}
+
+		// Lock it (or re-lock if same agent)
+		db.prepare(
+			`UPDATE tasks SET locked_by = ?, locked_at = datetime('now'), updated_at = datetime('now') WHERE task_id = ?`,
+		).run(agentName, taskId);
+
+		return { success: true };
+	})();
+
+	if (result.success) {
+		emit("task.checkout", `Task "${taskId}" checked out by "${agentName}"`);
+	}
+
+	return result;
+}
+
+/**
+ * Release the lock on a task, making it available for other agents.
+ * Can be called by any agent or manually — always clears the lock.
+ */
+export function releaseTask(taskId: string): void {
+	const db = getDb();
+	const row = db
+		.prepare("SELECT locked_by FROM tasks WHERE task_id = ?")
+		.get(taskId) as { locked_by: string | null } | null;
+
+	if (!row) {
+		throw new Error(`Task "${taskId}" not found`);
+	}
+
+	db.prepare(
+		`UPDATE tasks SET locked_by = NULL, locked_at = NULL, updated_at = datetime('now') WHERE task_id = ?`,
+	).run(taskId);
+
+	if (row.locked_by) {
+		emit("task.release", `Task "${taskId}" lock released (was held by "${row.locked_by}")`);
+	}
 }

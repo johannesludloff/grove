@@ -180,6 +180,8 @@ function shortEventType(type: EventType): string {
 		"task.completed": "done",
 		"task.failed": "fail",
 		"task.archived": "arch",
+		"task.checkout": "lock",
+		"task.release": "unlk",
 		"mail.sent": "sent",
 		"memory.added": "mem+",
 		"merge.enqueued": "mrgq",
