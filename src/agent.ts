@@ -5,7 +5,7 @@ import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
-import { getTask, incrementRetryCount, updateTask } from "./tasks.ts";
+import { getTask, getGoalAncestry, incrementRetryCount, updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
@@ -376,6 +376,7 @@ export async function spawnAgent(opts: {
 			? buildSiblingBlock(opts.parentName, opts.name)
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
+		const goalAncestryBlock = buildGoalAncestryBlock(opts.taskId);
 
 		// Build the prompt
 		const prompt = buildPrompt(
@@ -385,6 +386,7 @@ export async function spawnAgent(opts: {
 			memoryBlock,
 			siblingBlock,
 			priorWorkBlock,
+			goalAncestryBlock,
 			opts.parentName,
 			depth,
 		);
@@ -711,6 +713,7 @@ function buildPrompt(
 	memoryBlock: string,
 	siblingBlock: string,
 	priorWorkBlock: string,
+	goalAncestryBlock: string,
 	parentName?: string,
 	depth?: number,
 ): string {
@@ -718,6 +721,7 @@ function buildPrompt(
 	const memorySection = memoryBlock ? `\n${memoryBlock}\n` : "";
 	const siblingSection = siblingBlock ? `\n${siblingBlock}\n` : "";
 	const priorWorkSection = priorWorkBlock ? `\n${priorWorkBlock}\n` : "";
+	const goalAncestrySection = goalAncestryBlock ? `\n${goalAncestryBlock}\n` : "";
 
 	// Build the structured startup beacon
 	const timestamp = new Date().toISOString();
@@ -750,7 +754,7 @@ ${checklistLines}`;
 	return `${systemPart}
 
 ${beacon}
-${memorySection}${siblingSection}${priorWorkSection}
+${goalAncestrySection}${memorySection}${siblingSection}${priorWorkSection}
 ## Your Task
 ${taskDescription}
 
@@ -851,6 +855,33 @@ function buildSiblingBlock(parentName: string, selfName: string): string {
 	}
 	lines.push("");
 	lines.push("Coordinate to avoid conflicts — don't modify files another sibling is working on.");
+
+	return lines.join("\n");
+}
+
+/** Build a goal ancestry block showing the task's parent chain */
+function buildGoalAncestryBlock(taskId: string): string {
+	const ancestry = getGoalAncestry(taskId);
+
+	// Only show ancestry if there's a parent (chain length > 1)
+	if (ancestry.length <= 1) return "";
+
+	const lines = ["## Goal Ancestry", ""];
+	lines.push("You are working on this task as part of a larger goal chain:");
+	lines.push("");
+
+	// Format: current task → parent → grandparent → ... → root
+	const chain = ancestry.map((a) => a.title).join(" → ");
+	lines.push(chain);
+	lines.push("");
+
+	// Detailed breakdown
+	for (const [i, item] of ancestry.entries()) {
+		const prefix = i === 0 ? "**Current**" : `Level ${i}`;
+		lines.push(`- ${prefix}: ${item.title} (\`${item.taskId}\`)`);
+	}
+	lines.push("");
+	lines.push("Use this context to make better decisions about scope and priorities.");
 
 	return lines.join("\n");
 }

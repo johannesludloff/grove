@@ -192,9 +192,11 @@ taskCmd
 	.argument("<task-id>", "Unique task identifier")
 	.argument("<title>", "Task title")
 	.option("-d, --description <text>", "Task description")
-	.action((taskId: string, title: string, opts: { description?: string }) => {
-		const task = createTask({ taskId, title, description: opts.description });
-		console.log(`Created task: ${task.taskId} — ${task.title}`);
+	.option("--parent-task <task-id>", "Parent task ID for goal ancestry")
+	.action((taskId: string, title: string, opts: { description?: string; parentTask?: string }) => {
+		const task = createTask({ taskId, title, description: opts.description, parentTaskId: opts.parentTask });
+		const parentInfo = task.parentTaskId ? ` (parent: ${task.parentTaskId})` : "";
+		console.log(`Created task: ${task.taskId} — ${task.title}${parentInfo}`);
 	});
 
 taskCmd
