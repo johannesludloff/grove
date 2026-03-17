@@ -18,6 +18,7 @@ export interface Agent {
 	taskId: string;
 	parentName: string | null;
 	depth: number;
+	sessionId: string | null;
 	createdAt: string;
 	updatedAt: string;
 	lastActivityAt: string | null;

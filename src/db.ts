@@ -168,14 +168,9 @@ function ensureTables(db: Database): void {
 		// Column already exists — ignore
 	}
 
-	// Migrate: add locked_by and locked_at columns to tasks if they don't exist yet
+	// Migrate: add session_id column to agents for --resume support
 	try {
-		db.exec("ALTER TABLE tasks ADD COLUMN locked_by TEXT");
-	} catch {
-		// Column already exists — ignore
-	}
-	try {
-		db.exec("ALTER TABLE tasks ADD COLUMN locked_at TEXT");
+		db.exec("ALTER TABLE agents ADD COLUMN session_id TEXT");
 	} catch {
 		// Column already exists — ignore
 	}

@@ -329,6 +329,36 @@ export function checkParentAgentLimit(parentName: string, maxAgents?: number): v
 	}
 }
 
+/**
+ * Parse a Claude Code session ID from agent stdout.
+ * Claude Code outputs the session ID in its startup text.
+ * Matches patterns like: "Session: <id>", "session_id: <id>", or UUID-like strings after "session".
+ */
+function parseSessionId(stdout: string): string | null {
+	// Match "Session: <uuid>" or "session: <uuid>" (common Claude Code output)
+	const patterns = [
+		/session[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+		/session.id[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+		/--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+	];
+
+	for (const pattern of patterns) {
+		const match = stdout.match(pattern);
+		if (match?.[1]) return match[1];
+	}
+
+	return null;
+}
+
+/** Look up a previous agent's session ID by name */
+export function getAgentSessionId(agentName: string): string | null {
+	const db = getDb();
+	const row = db
+		.prepare("SELECT session_id FROM agents WHERE name = ?")
+		.get(agentName) as { session_id: string | null } | null;
+	return row?.session_id ?? null;
+}
+
 /** Spawn a new Claude Code agent in a worktree */
 export async function spawnAgent(opts: {
 	name: string;
@@ -341,6 +371,7 @@ export async function spawnAgent(opts: {
 	depth?: number;
 	maxDepth?: number;
 	maxAgents?: number;
+	resumeSessionId?: string;
 }): Promise<SpawnResult> {
 	const db = getDb();
 
@@ -481,24 +512,29 @@ export async function spawnAgent(opts: {
 
 		const model = resolveModel(opts.capability, opts.model);
 		const effort = resolveEffort(opts.capability);
-		const args = [
-			"claude",
-			"-p",
-			"--model",
-			model,
-			"--effort",
-			effort,
-			"--allowedTools",
-			ALLOWED_TOOLS[opts.capability] ?? "",
+
+		// Build claude args — use --resume if we have a session ID from a previous agent
+		const isResume = !!opts.resumeSessionId;
+		const args: string[] = ["claude"];
+		if (isResume) {
+			args.push("--resume", opts.resumeSessionId!);
+		} else {
+			args.push("-p");
+		}
+		args.push(
+			"--model", model,
+			"--effort", effort,
+			"--allowedTools", ALLOWED_TOOLS[opts.capability] ?? "",
 			"--dangerously-skip-permissions",
-		];
+		);
 
 		proc = Bun.spawn(args, {
 			cwd: worktreePath,
 			stdout: Bun.file(`${logDir}/stdout.txt`),
 			stderr: Bun.file(`${logDir}/stderr.log`),
-			stdin: "pipe",
-			env: Object.fromEntries(Object.entries({ ...process.env, GROVE_AGENT: "1" }).filter(([k]) => k !== "CLAUDECODE")),
+			// Only pipe prompt via stdin for fresh sessions; resumed sessions don't need it
+			stdin: isResume ? undefined : Bun.file(promptFile),
+			env: { ...process.env, PATH: process.env.PATH, CLAUDECODE: "", GROVE_AGENT: "1" },
 		});
 		// Write prompt to stdin manually — Bun.file() as stdin does not reliably pipe content
 		const promptContent = await Bun.file(promptFile).text();
@@ -541,11 +577,17 @@ export async function spawnAgent(opts: {
 	// Poll stdout.txt for new output every 10s and update last_activity_at
 	const stdoutFile = `${logDir}/stdout.txt`;
 	let lastKnownSize = 0;
+	let sessionIdCaptured = !!opts.resumeSessionId; // Already have it if resuming
 	const timeoutMs = CAPABILITY_TIMEOUTS[opts.capability];
 	const HEARTBEAT_INTERVAL_MS = 60_000;
 	let lastHeartbeatAt = Date.now();
 	/** Tracks which nudge stage has been sent (0=none, 1=gentle, 2=firm, 3=escalated) */
 	let lastNudgeStage = 0;
+
+	// If resuming, store the session ID immediately
+	if (opts.resumeSessionId) {
+		db.prepare("UPDATE agents SET session_id = ? WHERE name = ?").run(opts.resumeSessionId, opts.name);
+	}
 
 	const activityPoller = setInterval(async () => {
 		try {
@@ -566,6 +608,22 @@ export async function spawnAgent(opts: {
 				getDb()
 					.prepare("UPDATE agents SET last_activity_at = datetime('now') WHERE name = ? AND status IN ('running', 'spawning')")
 					.run(opts.name);
+
+				// Try to capture session ID from early output (only once)
+				if (!sessionIdCaptured) {
+					try {
+						const content = await file.text();
+						const captured = parseSessionId(content);
+						if (captured) {
+							sessionIdCaptured = true;
+							getDb()
+								.prepare("UPDATE agents SET session_id = ? WHERE name = ?")
+								.run(captured, opts.name);
+						}
+					} catch {
+						// File may be mid-write — retry next poll
+					}
+				}
 				// Send heartbeat mail if enough time has passed since last heartbeat
 				if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
 					lastHeartbeatAt = now;
@@ -799,6 +857,7 @@ export async function spawnAgent(opts: {
 		taskId: opts.taskId,
 		parentName: opts.parentName ?? null,
 		depth,
+		sessionId: opts.resumeSessionId ?? null,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 		lastActivityAt: null,
@@ -1168,9 +1227,12 @@ async function maybeRetryAgent(opts: {
 	const newCount = incrementRetryCount(opts.taskId);
 	const retryName = `${opts.name}-retry${newCount}`;
 
-	emit("agent.spawn", `Auto-retrying task "${opts.taskId}" (attempt ${newCount}/${MAX_RETRIES}) as "${retryName}"`, {
+	// Look up previous agent's session ID for --resume
+	const previousSessionId = getAgentSessionId(opts.name);
+
+	emit("agent.spawn", `Auto-retrying task "${opts.taskId}" (attempt ${newCount}/${MAX_RETRIES}) as "${retryName}"${previousSessionId ? " with --resume" : ""}`, {
 		agent: retryName,
-		detail: `previous=${opts.name} retry=${newCount}`,
+		detail: `previous=${opts.name} retry=${newCount}${previousSessionId ? ` resume=${previousSessionId}` : ""}`,
 	});
 
 	// Reset task status so the new agent can pick it up
@@ -1186,6 +1248,7 @@ async function maybeRetryAgent(opts: {
 			parentName: opts.parentName ?? undefined,
 			depth: opts.depth,
 			model: opts.model,
+			resumeSessionId: previousSessionId ?? undefined,
 		});
 
 		const recipient = opts.parentName ?? "orchestrator";
@@ -1267,6 +1330,7 @@ export function getAgentByWorktree(worktreePath: string): Agent | null {
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
 			        task_id as taskId, parent_name as parentName, depth,
+			        session_id as sessionId,
 			        created_at as createdAt, updated_at as updatedAt,
 			        last_activity_at as lastActivityAt
 		   FROM agents WHERE REPLACE(worktree, '\\', '/') = ?`,
@@ -1281,6 +1345,7 @@ export function getAgent(name: string): Agent | null {
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
 			        task_id as taskId, parent_name as parentName, depth,
+			        session_id as sessionId,
 			        created_at as createdAt, updated_at as updatedAt,
 			        last_activity_at as lastActivityAt
 		   FROM agents WHERE name = ?`,
@@ -1298,6 +1363,7 @@ export function listAgents(status?: AgentStatus): Agent[] {
 		.prepare(
 			`SELECT id, name, capability, status, pid, worktree, branch,
 			        task_id as taskId, parent_name as parentName, depth,
+			        session_id as sessionId,
 			        created_at as createdAt, updated_at as updatedAt,
 			        last_activity_at as lastActivityAt
 		   FROM agents ${where} ORDER BY created_at DESC`,
