@@ -273,3 +273,55 @@ export function releaseTask(taskId: string): void {
 		emit("task.release", `Task "${taskId}" lock released (was held by "${row.locked_by}")`);
 	}
 }
+
+/** Check if any dependency tasks are not yet completed */
+function hasUnresolvedDependencies(depIds: string[]): boolean {
+	const db = getDb();
+	for (const depId of depIds) {
+		const dep = db
+			.prepare("SELECT status FROM tasks WHERE task_id = ?")
+			.get(depId) as { status: string } | null;
+		if (!dep || dep.status !== "completed") {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** When a task completes, unblock any tasks that depended on it */
+function unblockDependents(completedTaskId: string): void {
+	const db = getDb();
+	const dependents = db
+		.prepare(
+			`SELECT DISTINCT td.task_id FROM task_dependencies td
+			 JOIN tasks t ON t.task_id = td.task_id
+			 WHERE td.depends_on = ? AND t.status = 'blocked'`,
+		)
+		.all(completedTaskId) as { task_id: string }[];
+
+	for (const { task_id: depTaskId } of dependents) {
+		const unmetDeps = db
+			.prepare(
+				`SELECT td.depends_on FROM task_dependencies td
+				 JOIN tasks t ON t.task_id = td.depends_on
+				 WHERE td.task_id = ? AND t.status != 'completed'`,
+			)
+			.all(depTaskId) as { depends_on: string }[];
+
+		if (unmetDeps.length === 0) {
+			db.prepare(
+				"UPDATE tasks SET status = 'pending', updated_at = datetime('now') WHERE task_id = ?",
+			).run(depTaskId);
+			emit("task.unblocked", `Task "${depTaskId}" unblocked (all dependencies met)`);
+		}
+	}
+}
+
+/** Get the dependency task IDs for a given task */
+export function getTaskDependencies(taskId: string): string[] {
+	const db = getDb();
+	const rows = db
+		.prepare("SELECT depends_on FROM task_dependencies WHERE task_id = ?")
+		.all(taskId) as { depends_on: string }[];
+	return rows.map((r) => r.depends_on);
+}

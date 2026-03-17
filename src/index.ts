@@ -6,7 +6,7 @@ import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch, isGitRepo, initGitRepo } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks } from "./tasks.ts";
+import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, checkoutTask, releaseTask, getTaskDependencies } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive, getAgentSessionId } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail, hasMergeReadyMail } from "./mail.ts";

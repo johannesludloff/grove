@@ -5,7 +5,7 @@ import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
-import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask } from "./tasks.ts";
+import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask, getGoalAncestry } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
@@ -1039,7 +1039,7 @@ function buildGoalAncestryBlock(taskId: string): string {
 	lines.push("");
 
 	// Format: current task → parent → grandparent → ... → root
-	const chain = ancestry.map((a) => a.title).join(" → ");
+	const chain = ancestry.map((a: { taskId: string; title: string }) => a.title).join(" → ");
 	lines.push(chain);
 	lines.push("");
 
