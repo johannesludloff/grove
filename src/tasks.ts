@@ -10,6 +10,7 @@ export function createTask(opts: {
 	title: string;
 	description?: string;
 	dependsOn?: string[];
+	parentTaskId?: string;
 }): Task {
 	const db = getDb();
 
@@ -31,10 +32,10 @@ export function createTask(opts: {
 	const initialStatus = hasUnmetDeps ? "blocked" : "pending";
 
 	const stmt = db.prepare(`
-		INSERT INTO tasks (task_id, title, description, status)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO tasks (task_id, title, description, status, parent_task_id)
+		VALUES (?, ?, ?, ?, ?)
 	`);
-	const result = stmt.run(opts.taskId, opts.title, opts.description ?? "", initialStatus);
+	const result = stmt.run(opts.taskId, opts.title, opts.description ?? "", initialStatus, opts.parentTaskId ?? null);
 
 	// Record dependencies
 	if (opts.dependsOn?.length) {
@@ -53,6 +54,7 @@ export function createTask(opts: {
 		description: opts.description ?? "",
 		status: initialStatus,
 		assignedTo: null,
+		parentTaskId: opts.parentTaskId ?? null,
 		retryCount: 0,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
@@ -69,7 +71,8 @@ export function getTask(taskId: string): Task | null {
 	const row = db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        retry_count as retryCount, created_at as createdAt, updated_at as updatedAt
+			        parent_task_id as parentTaskId, retry_count as retryCount,
+			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks WHERE task_id = ?`,
 		)
 		.get(taskId) as Task | null;
@@ -126,7 +129,8 @@ export function listTasks(status?: TaskStatus): Task[] {
 	return db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
-			        retry_count as retryCount, created_at as createdAt, updated_at as updatedAt
+			        parent_task_id as parentTaskId, retry_count as retryCount,
+			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks ${where} ORDER BY created_at DESC`,
 		)
 		.all(...params) as Task[];
@@ -158,6 +162,32 @@ export function archiveCompletedTasks(): string[] {
 	}
 
 	return archived;
+}
+
+/** Traverse the parent task chain and return the goal ancestry (leaf → root order) */
+export function getGoalAncestry(taskId: string): Array<{ taskId: string; title: string }> {
+	const db = getDb();
+	const ancestry: Array<{ taskId: string; title: string }> = [];
+	let currentId: string | null = taskId;
+	const seen = new Set<string>();
+	const MAX_DEPTH = 10;
+
+	while (currentId && ancestry.length < MAX_DEPTH) {
+		if (seen.has(currentId)) break; // prevent cycles
+		seen.add(currentId);
+
+		const row = db
+			.prepare(
+				"SELECT task_id as taskId, title, parent_task_id as parentTaskId FROM tasks WHERE task_id = ?",
+			)
+			.get(currentId) as { taskId: string; title: string; parentTaskId: string | null } | null;
+
+		if (!row) break;
+		ancestry.push({ taskId: row.taskId, title: row.title });
+		currentId = row.parentTaskId;
+	}
+
+	return ancestry;
 }
 
 /** Increment a task's retry count and return the new count */

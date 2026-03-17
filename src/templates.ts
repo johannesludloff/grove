@@ -20,6 +20,7 @@ export interface TemplateVars {
 	memory_block: string;
 	sibling_block: string;
 	prior_work_block: string;
+	goal_ancestry_block: string;
 }
 
 /** Cache loaded templates to avoid re-reading files */
@@ -133,6 +134,7 @@ export function buildPromptFromTemplate(opts: {
 	memoryBlock?: string;
 	siblingBlock?: string;
 	priorWorkBlock?: string;
+	goalAncestryBlock?: string;
 }): string {
 	const template = loadTemplate(opts.capability);
 
@@ -151,6 +153,7 @@ export function buildPromptFromTemplate(opts: {
 		memory_block: opts.memoryBlock ? `\n${opts.memoryBlock}\n` : "",
 		sibling_block: opts.siblingBlock ? `\n${opts.siblingBlock}\n` : "",
 		prior_work_block: opts.priorWorkBlock ? `\n${opts.priorWorkBlock}\n` : "",
+		goal_ancestry_block: opts.goalAncestryBlock ?? "",
 	};
 
 	return renderTemplate(template, vars);

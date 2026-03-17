@@ -121,14 +121,16 @@ taskCmd
 	.argument("<title>", "Task title")
 	.option("-d, --description <text>", "Task description")
 	.option("--depends-on <ids>", "Comma-separated task IDs this task depends on")
-	.action((taskId: string, title: string, opts: { description?: string; dependsOn?: string }) => {
+	.option("--parent-task <task-id>", "Parent task ID for goal ancestry")
+	.action((taskId: string, title: string, opts: { description?: string; dependsOn?: string; parentTask?: string }) => {
 		const dependsOn = opts.dependsOn
 			? opts.dependsOn.split(",").map((s) => s.trim()).filter(Boolean)
 			: undefined;
 		try {
-			const task = createTask({ taskId, title, description: opts.description, dependsOn });
+			const task = createTask({ taskId, title, description: opts.description, dependsOn, parentTaskId: opts.parentTask });
 			const statusNote = task.status === "blocked" ? " (blocked — waiting on dependencies)" : "";
-			console.log(`Created task: ${task.taskId} — ${task.title}${statusNote}`);
+			const parentInfo = task.parentTaskId ? ` (parent: ${task.parentTaskId})` : "";
+			console.log(`Created task: ${task.taskId} — ${task.title}${statusNote}${parentInfo}`);
 			if (dependsOn?.length) {
 				console.log(`  Dependencies: ${dependsOn.join(", ")}`);
 			}

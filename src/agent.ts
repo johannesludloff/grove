@@ -5,7 +5,7 @@ import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
-import { getTask, incrementRetryCount, updateTask } from "./tasks.ts";
+import { getTask, getGoalAncestry, incrementRetryCount, updateTask } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree } from "./worktree.ts";
@@ -430,6 +430,7 @@ export async function spawnAgent(opts: {
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
 		const checkpointBlock = buildCheckpointBlock(opts.taskId, opts.name);
+		const goalAncestryBlock = buildGoalAncestryBlock(opts.taskId);
 
 		// Include scout findings for builders and leads (scouts don't need their own findings)
 		const scoutFindingsBlock =
@@ -454,6 +455,7 @@ export async function spawnAgent(opts: {
 			scoutFindingsBlock,
 			fileOwnershipBlock,
 			checkpointBlock,
+			goalAncestryBlock,
 			opts.parentName,
 			depth,
 			opts.taskId,
@@ -853,6 +855,7 @@ function buildPrompt(
 	scoutFindingsBlock: string,
 	fileOwnershipBlock: string,
 	checkpointBlock: string,
+	goalAncestryBlock: string,
 	parentName?: string,
 	depth?: number,
 	taskId?: string,
@@ -872,6 +875,7 @@ function buildPrompt(
 		priorFindings: scoutFindingsBlock,
 		fileScope: fileOwnershipBlock,
 		checkpointBlock,
+		goalAncestryBlock,
 	});
 }
 
@@ -946,6 +950,33 @@ function buildSiblingBlock(parentName: string, selfName: string): string {
 	}
 	lines.push("");
 	lines.push("Coordinate to avoid conflicts — don't modify files another sibling is working on.");
+
+	return lines.join("\n");
+}
+
+/** Build a goal ancestry block showing the task's parent chain */
+function buildGoalAncestryBlock(taskId: string): string {
+	const ancestry = getGoalAncestry(taskId);
+
+	// Only show ancestry if there's a parent (chain length > 1)
+	if (ancestry.length <= 1) return "";
+
+	const lines = ["## Goal Ancestry", ""];
+	lines.push("You are working on this task as part of a larger goal chain:");
+	lines.push("");
+
+	// Format: current task → parent → grandparent → ... → root
+	const chain = ancestry.map((a) => a.title).join(" → ");
+	lines.push(chain);
+	lines.push("");
+
+	// Detailed breakdown
+	for (const [i, item] of ancestry.entries()) {
+		const prefix = i === 0 ? "**Current**" : `Level ${i}`;
+		lines.push(`- ${prefix}: ${item.title} (\`${item.taskId}\`)`);
+	}
+	lines.push("");
+	lines.push("Use this context to make better decisions about scope and priorities.");
 
 	return lines.join("\n");
 }

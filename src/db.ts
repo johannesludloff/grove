@@ -165,6 +165,13 @@ function ensureTables(db: Database): void {
 	} catch {
 		// Column already exists — ignore
 	}
+
+	// Migrate: add parent_task_id column to tasks if it doesn't exist yet
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
 }
 
 /** Initialize the database with all tables */
