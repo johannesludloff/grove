@@ -841,6 +841,27 @@ program
 						}
 					}
 
+					// CLAUDE.md sync guard: warn if core behavior files changed without CLAUDE.md update
+					const coreFiles = [
+						"src/agent.ts", "src/index.ts", "src/merge-resolver.ts",
+						"src/merge-queue.ts", "src/watchdog.ts", "src/tasks.ts",
+						"src/hooks.ts",
+					];
+					const coreFilePrefixes = ["src/mail/"];
+					for (const agent of toMerge) {
+						const branchFiles = await getModifiedFiles(agent.branch);
+						const touchedCore = branchFiles.some(
+							(f) => coreFiles.includes(f) || coreFilePrefixes.some((p) => f.startsWith(p)),
+						);
+						const touchedClaudeMd = branchFiles.some((f) => f === "CLAUDE.md");
+						if (touchedCore && !touchedClaudeMd) {
+							console.log(
+								`\n  WARNING: Core behavior files changed in branch "${agent.branch}" but CLAUDE.md was not updated.` +
+								"\n  Consider updating CLAUDE.md to reflect the new behavior.",
+							);
+						}
+					}
+
 					// Spawn reviewer if requested
 					if (opts.review) {
 						if (!passed) {

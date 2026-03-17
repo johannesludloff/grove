@@ -27,7 +27,10 @@ const SYSTEM_PROMPTS: Record<AgentCapability, string> = {
 Focus on writing clean, working code. When done, commit your changes and report back.
 
 ## Spec File
-If a spec file exists at \`.grove/specs/<task-id>.md\`, read it before starting. It contains your objective, acceptance criteria, owned files, context, and dependencies. You MUST only modify files listed in the spec's "File Scope" section — modifying other files risks merge conflicts with parallel builders.`,
+If a spec file exists at \`.grove/specs/<task-id>.md\`, read it before starting. It contains your objective, acceptance criteria, owned files, context, and dependencies. You MUST only modify files listed in the spec's "File Scope" section — modifying other files risks merge conflicts with parallel builders.
+
+## CLAUDE.md Sync Reminder
+If your changes affect how agents work, how commands behave, or how the orchestrator should operate, update the relevant section in CLAUDE.md to reflect the new behavior.`,
 
 	scout: `You are a scout agent. Your job is to explore the codebase and gather information.
 Do NOT modify any files. Read, search, and analyze only. Report your findings.`,
