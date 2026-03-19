@@ -1,9 +1,11 @@
 /** Background watchdog for proactive agent health monitoring */
 
+import { readFileSync, existsSync } from "node:fs";
 import { listAgents, isPidAlive, reconcileZombies } from "./agent.ts";
 import { sendMail } from "./mail.ts";
 import { emit } from "./events.ts";
 import { runHealthChecks, formatHealthReport } from "./health.ts";
+import type { Agent } from "./types.ts";
 
 /** Watchdog check interval in ms (30 seconds) */
 const CHECK_INTERVAL_MS = 30_000;
@@ -131,13 +133,18 @@ function runHealthCheck(): void {
 		return now - new Date(agent.createdAt).getTime() >= MIN_AGE_FOR_STALL_MS;
 	});
 	if (matureStalled.length > 0) {
-		sendMail({
-			from: "watchdog",
-			to: "orchestrator",
-			subject: `Stalled agents: ${matureStalled.join(", ")}`,
-			body: `Watchdog detected ${matureStalled.length} agent(s) with no output growth for ${STALL_THRESHOLD} consecutive checks (~${(STALL_THRESHOLD * CHECK_INTERVAL_MS) / 1000}s): ${matureStalled.join(", ")}. These agents may be stuck.`,
-			type: "status",
-		});
+		const stallDuration = (STALL_THRESHOLD * CHECK_INTERVAL_MS) / 1000;
+		for (const name of matureStalled) {
+			const agent = running.find((a) => a.name === name);
+			const body = buildStallDiagnostics(name, agent ?? null, stallDuration);
+			sendMail({
+				from: "watchdog",
+				to: "orchestrator",
+				subject: `Stalled agent: ${name}`,
+				body,
+				type: "status",
+			});
+		}
 	}
 
 	// 5. Periodic health summary every 5 minutes (skip when no agents running)
@@ -169,6 +176,45 @@ function runHealthCheck(): void {
 			stdoutSizes.delete(name);
 		}
 	}
+}
+
+/** Build enriched diagnostics for a stalled agent */
+function buildStallDiagnostics(name: string, agent: Agent | null, stallSeconds: number): string {
+	const pid = agent?.pid ?? 0;
+	const logDir = `${process.cwd()}/.grove/logs/${name}`;
+
+	// PID liveness
+	const alive = pid > 0 && isPidAlive(pid);
+	const pidStatus = pid > 0 ? (alive ? "alive" : "dead") : "unknown";
+
+	// Last tool used
+	let lastTool = "unknown";
+	try {
+		const toolPath = `${logDir}/last-tool.json`;
+		if (existsSync(toolPath)) {
+			const data = JSON.parse(readFileSync(toolPath, "utf-8"));
+			if (data?.tool_name) lastTool = data.tool_name;
+			else if (data?.toolName) lastTool = data.toolName;
+			else if (typeof data?.name === "string") lastTool = data.name;
+		}
+	} catch {
+		// Ignore parse errors
+	}
+
+	// Last 5 lines of stdout
+	let lastOutput = "(no output)";
+	try {
+		const stdoutPath = `${logDir}/stdout.txt`;
+		if (existsSync(stdoutPath)) {
+			const content = readFileSync(stdoutPath, "utf-8");
+			const lines = content.trimEnd().split("\n");
+			lastOutput = lines.slice(-5).join("\n");
+		}
+	} catch {
+		// Ignore read errors
+	}
+
+	return `Agent ${name} stalled (~${stallSeconds}s no output). PID ${pid}: ${pidStatus}. Last tool: ${lastTool}. Last output:\n${lastOutput}`;
 }
 
 /** Send a periodic health summary to the orchestrator */
