@@ -374,7 +374,8 @@ program
 
 		const fmt = (a: (typeof agents)[0], prefix: string) => {
 			const pid = a.pid ? ` (PID ${a.pid})` : "";
-			console.log(`${prefix}[${a.status}] ${a.name} — ${a.capability} on ${a.branch}${pid}${fmtLastActive(a)}`);
+			const branchInfo = a.branch ? ` on ${a.branch}` : '';
+			console.log(`${prefix}[${a.status}] ${a.name} — ${a.capability}${branchInfo}${pid}${fmtLastActive(a)}`);
 		};
 
 		for (const root of roots) {
@@ -945,7 +946,7 @@ program
 			const toClean: typeof agents = [];
 			for (const a of agents) {
 				if (a.status === "completed" || a.status === "stopped" || a.status === "failed") {
-					if (a.status === "completed" && !mergedBranches.has(a.branch)) {
+					if (a.status === "completed" && a.branch !== '' && !mergedBranches.has(a.branch)) {
 						console.log(
 							`  Skipping ${a.name}: branch ${a.branch} has not been merged. Run 'grove merge --all' first.`,
 						);

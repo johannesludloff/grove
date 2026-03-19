@@ -434,14 +434,18 @@ export async function spawnAgent(opts: {
 	let logDir: string;
 
 	try {
-		// Create worktree
-		const wt = await createWorktree(opts.name, opts.baseBranch);
-		worktreePath = wt.worktreePath;
-		branch = wt.branch;
-		worktreeCreated = true;
-
-		// Deploy capability-specific PreToolUse guards to the worktree
-		await installAgentHooks(worktreePath, opts.capability);
+		if (opts.capability === 'scout' || opts.capability === 'reviewer') {
+			// Scouts/reviewers are read-only — no worktree or branch needed
+			worktreePath = process.cwd();
+			branch = '';
+		} else {
+			const wt = await createWorktree(opts.name, opts.baseBranch);
+			worktreePath = wt.worktreePath;
+			branch = wt.branch;
+			worktreeCreated = true;
+			// Only install hooks for agents with dedicated worktrees
+			await installAgentHooks(worktreePath, opts.capability);
+		}
 
 		// Register agent in DB
 		const stmt = db.prepare(`
@@ -1560,7 +1564,10 @@ export async function cleanAgent(name: string): Promise<void> {
 		markRead(msg.id);
 	}
 
-	await removeWorktree(name);
+	// Only remove worktree if agent had a dedicated one (scouts/reviewers use main worktree)
+	if (agent.branch && agent.branch !== '') {
+		await removeWorktree(name);
+	}
 
 	const db = getDb();
 	db.prepare("UPDATE agents SET status = 'cleaned', updated_at = datetime('now') WHERE name = ?").run(name);
