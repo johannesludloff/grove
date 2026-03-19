@@ -1,6 +1,6 @@
 {
 	"name": "grove",
-	"version": "0.4.0",
+	"version": "0.4.1",
 	"description": "Windows-native multi-agent orchestrator for Claude Code",
 	"module": "src/index.ts",
 	"type": "module",
