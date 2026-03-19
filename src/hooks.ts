@@ -268,7 +268,9 @@ export function buildAgentGuards(capability: AgentCapability): HookGroup[] {
 }
 
 /**
- * Install capability-specific PreToolUse guards into an agent worktree.
+ * Install a COMPLETE hooks config for an agent worktree.
+ * Replaces ALL hooks (does NOT spread existing settings.hooks) to prevent
+ * agents from inheriting orchestrator hooks (grove prime, grove mail deliver, etc.).
  * Writes to <worktreePath>/.claude/settings.local.json.
  */
 export async function installAgentHooks(
@@ -291,13 +293,44 @@ export async function installAgentHooks(
 		}
 	}
 
+	// Build a complete agent hooks config — no spreading of existing hooks.
+	// Agents get ONLY these hooks:
+	// - UserPromptSubmit: mail check using $GROVE_AGENT_NAME (set in Bun.spawn env)
+	// - PostToolUse: tool metrics (useful for all agents)
+	// - PreToolUse: capability-specific guards
+	// Explicitly excluded (orchestrator-only):
+	// - SessionStart (grove prime)
+	// - Stop (grove mail deliver — 5-min polling loop)
+	// - SessionEnd (grove session-end)
+	const agentHooks: HooksConfig = {
+		UserPromptSubmit: [
+			{
+				hooks: [
+					{
+						type: "command",
+						command: "grove mail check $GROVE_AGENT_NAME",
+					},
+				],
+			},
+		],
+		PostToolUse: [
+			{
+				hooks: [
+					{
+						type: "command",
+						command: "grove tool-metric",
+					},
+				],
+			},
+		],
+	};
+
 	const guards = buildAgentGuards(capability);
 	if (guards.length > 0) {
-		settings.hooks = {
-			...settings.hooks,
-			PreToolUse: guards,
-		};
+		agentHooks.PreToolUse = guards;
 	}
+
+	settings.hooks = agentHooks;
 
 	await Bun.write(filePath, JSON.stringify(settings, null, 2) + "\n");
 }
