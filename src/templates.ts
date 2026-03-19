@@ -21,6 +21,8 @@ export interface TemplateVars {
 	sibling_block: string;
 	prior_work_block: string;
 	goal_ancestry_block: string;
+	skip_scout: string;
+	skip_review: string;
 }
 
 /** Cache loaded templates to avoid re-reading files */
@@ -135,6 +137,8 @@ export function buildPromptFromTemplate(opts: {
 	siblingBlock?: string;
 	priorWorkBlock?: string;
 	goalAncestryBlock?: string;
+	skipScout?: boolean;
+	skipReview?: boolean;
 }): string {
 	const template = loadTemplate(opts.capability);
 
@@ -154,6 +158,8 @@ export function buildPromptFromTemplate(opts: {
 		sibling_block: opts.siblingBlock ? `\n${opts.siblingBlock}\n` : "",
 		prior_work_block: opts.priorWorkBlock ? `\n${opts.priorWorkBlock}\n` : "",
 		goal_ancestry_block: opts.goalAncestryBlock ?? "",
+		skip_scout: opts.skipScout ? "true" : "",
+		skip_review: opts.skipReview ? "true" : "",
 	};
 
 	return renderTemplate(template, vars);

@@ -237,10 +237,12 @@ program
 	.option("--max-depth <n>", "Maximum spawn depth (default: 2)")
 	.option("--max-agents <n>", "Maximum active sub-agents per lead (default: 5, 0=unlimited)")
 	.option("--resume-from <agent-name>", "Resume from a previous agent's Claude Code session")
+	.option("--skip-scout", "Skip mandatory scout phase (leads only)")
+	.option("--skip-review", "Skip review phase (leads only)")
 	.action(
 		async (
 			taskId: string,
-			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string; maxAgents?: string; resumeFrom?: string },
+			opts: { name: string; capability: string; model?: string; parent?: string; depth?: string; maxDepth?: string; maxAgents?: string; resumeFrom?: string; skipScout?: boolean; skipReview?: boolean },
 		) => {
 			const task = getTask(taskId);
 			if (!task) {
@@ -281,6 +283,8 @@ program
 				maxDepth: opts.maxDepth ? Number(opts.maxDepth) : undefined,
 				maxAgents: opts.maxAgents ? Number(opts.maxAgents) : undefined,
 				resumeSessionId,
+				skipScout: opts.skipScout,
+				skipReview: opts.skipReview,
 			});
 
 			// Start watchdog on first spawn if not already running

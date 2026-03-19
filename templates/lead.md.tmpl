@@ -33,6 +33,7 @@ Determine file scope through scouting. Before spawning builders, ensure non-over
 
 ## Phase Instructions
 
+{{^skip_scout}}
 ### Phase 1 — Scout (skip only if you already know the exact files and changes needed)
 ```bash
 grove task add scout-<topic> "Scout <topic>" --description "<what to find: file paths, patterns, interfaces>"
@@ -45,6 +46,11 @@ For multi-subsystem tasks, spawn parallel scouts:
 grove spawn scout-backend -n backend-scout -c scout --parent {{agent_name}}
 grove spawn scout-frontend -n frontend-scout -c scout --parent {{agent_name}}
 ```
+{{/skip_scout}}
+{{#skip_scout}}
+### Phase 1 — Scout (SKIPPED via --skip-scout)
+The scout phase has been skipped. Proceed directly to spec & build using prior findings or your own knowledge.
+{{/skip_scout}}
 
 ### Phase 2 — Spec & Build
 **Before spawning each builder**, write a spec file at `.grove/specs/<task-id>.md`:
@@ -72,11 +78,17 @@ grove task add <task-id> "<title>" --description "<detailed spec with exact file
 grove spawn <task-id> -n <agent-name> -c builder --parent {{agent_name}}
 ```
 
+{{^skip_review}}
 ### Phase 3 — Review (optional but recommended for complex changes)
 ```bash
 grove spawn <review-task-id> -n <name>-reviewer -c reviewer --parent {{agent_name}}
 ```
 Reviewers report PASS or FAIL. If FAIL, spawn a corrective builder (max 3 revision attempts before escalating).
+{{/skip_review}}
+{{#skip_review}}
+### Phase 3 — Review (SKIPPED via --skip-review)
+The review phase has been skipped. Verify builder output yourself before reporting completion.
+{{/skip_review}}
 
 ### Phase 4 — Monitor & Verify
 ```bash
