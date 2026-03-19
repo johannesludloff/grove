@@ -251,15 +251,15 @@ export function buildAgentGuards(capability: AgentCapability): HookGroup[] {
 				},
 			];
 		case "lead":
-			// Leads: block Write/Edit on project source files (allow .grove/ and .claude/)
-			// Reuses the existing grove guard command which parses stdin and checks file paths
+			// Leads are coordinators — block all write tools unconditionally
 			return [
 				{
 					matcher: "Write|Edit|NotebookEdit",
 					hooks: [
 						{
 							type: "command",
-							command: "grove guard",
+							command:
+								"echo 'BLOCKED: Lead agents coordinate, they do not implement. Spawn a builder instead.' >&2 && exit 2",
 						},
 					],
 				},

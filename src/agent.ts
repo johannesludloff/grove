@@ -231,7 +231,7 @@ const ALLOWED_TOOLS: Record<AgentCapability, string> = {
 	builder: "Bash,Read,Write,Edit,Glob,Grep",
 	scout: "Bash,Read,Glob,Grep",
 	reviewer: "Bash,Read,Glob,Grep",
-	lead: "Bash,Read,Write,Edit,Glob,Grep",
+	lead: "Bash,Read,Glob,Grep,Agent",
 };
 
 // Model defaults are configured in src/models.ts
