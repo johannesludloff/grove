@@ -372,6 +372,8 @@ export async function spawnAgent(opts: {
 	maxDepth?: number;
 	maxAgents?: number;
 	resumeSessionId?: string;
+	skipScout?: boolean;
+	skipReview?: boolean;
 }): Promise<SpawnResult> {
 	const db = getDb();
 
@@ -504,6 +506,8 @@ export async function spawnAgent(opts: {
 			depth,
 			opts.taskId,
 			branch,
+			opts.skipScout,
+			opts.skipReview,
 		);
 
 		// Write log dir marker and prompt file in parallel
@@ -939,6 +943,8 @@ function buildPrompt(
 	depth?: number,
 	taskId?: string,
 	branchName?: string,
+	skipScout?: boolean,
+	skipReview?: boolean,
 ): string {
 	return buildPromptFromTemplate({
 		capability,
@@ -955,6 +961,8 @@ function buildPrompt(
 		fileScope: fileOwnershipBlock,
 		checkpointBlock,
 		goalAncestryBlock,
+		skipScout,
+		skipReview,
 	});
 }
 
