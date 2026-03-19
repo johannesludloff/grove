@@ -538,7 +538,7 @@ export async function spawnAgent(opts: {
 			stderr: Bun.file(`${logDir}/stderr.log`),
 			// Only pipe prompt via stdin for fresh sessions; resumed sessions don't need it
 			stdin: isResume ? undefined : "pipe",
-			env: Object.fromEntries(Object.entries({ ...process.env, GROVE_AGENT: "1" }).filter(([k]) => k !== "CLAUDECODE")),
+			env: Object.fromEntries(Object.entries({ ...process.env, GROVE_AGENT: "1", GROVE_AGENT_NAME: opts.name }).filter(([k]) => k !== "CLAUDECODE")),
 		});
 		// Write prompt to stdin manually (only for fresh sessions, not resume)
 		if (!isResume && proc.stdin) {
