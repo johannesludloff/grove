@@ -263,6 +263,15 @@ export function buildAgentGuards(capability: AgentCapability): HookGroup[] {
 						},
 					],
 				},
+				{
+					matcher: "Read|Glob|Grep|Bash",
+					hooks: [
+						{
+							type: "command",
+							command: "grove guard --warn-read",
+						},
+					],
+				},
 			];
 	}
 }
