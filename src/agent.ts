@@ -544,7 +544,7 @@ export async function spawnAgent(opts: {
 		if (!isResume && proc.stdin) {
 			const promptContent = await Bun.file(promptFile).text();
 			const stdinWriter = proc.stdin as import("bun").FileSink;
-			stdinWriter.write(promptContent);
+			await stdinWriter.write(promptContent);
 			stdinWriter.end();
 		}
 
