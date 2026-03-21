@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-03-21
+
+### Added
+- Experiment results logging — agents record what they tried and outcomes
+- Prior results injection — future agents see past attempts in their prompt
+- Experiment claiming — parallel agents claim approaches to prevent duplicate work
+- Iteration budgets — tasks can have max_iterations limit
+- Ratcheting guidance — builders auto-revert on failure and try new approaches
+- New CLI commands: `task show`, `context`, `result`, `results`, `claim`, `claims`, `budget`
+- Experiment tracking section in CLAUDE.md
+
 ## [0.4.4] - 2026-03-21
 
 ### Fixed
