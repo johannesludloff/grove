@@ -56,6 +56,12 @@ export function markRead(messageId: number): void {
 	db.prepare("UPDATE mail SET read = 1 WHERE id = ?").run(messageId);
 }
 
+/** Mark all unread mail for an agent as read (used when an agent is stopped, cleaned, or exits) */
+export function markAllMailRead(agentName: string): void {
+	const db = getDb();
+	db.prepare("UPDATE mail SET read = 1 WHERE to_agent = ? AND read = 0").run(agentName);
+}
+
 /** Check if an agent has sent a merge_ready mail */
 export function hasMergeReadyMail(agentName: string): boolean {
 	const db = getDb();

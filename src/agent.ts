@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
-import { sendMail, checkMail, markRead } from "./mail.ts";
+import { sendMail, checkMail, markRead, markAllMailRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
 import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask, getGoalAncestry } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
@@ -800,6 +800,9 @@ export async function spawnAgent(opts: {
 			agent: opts.name,
 		});
 
+		// Mark all unread mail to this agent as read — nobody will ever check this inbox
+		markAllMailRead(opts.name);
+
 		// Cascade stop: if a lead agent fails, stop all running sub-agents
 		if (status === "failed" && opts.capability === "lead") {
 			const children = liveDb
@@ -1523,6 +1526,9 @@ export async function stopAgent(name: string): Promise<void> {
 	const db = getDb();
 	db.prepare("UPDATE agents SET status = 'stopped', updated_at = datetime('now') WHERE name = ?").run(name);
 
+	// Mark all unread mail to this agent as read — nobody will ever check this inbox
+	markAllMailRead(name);
+
 	emit("agent.stopped", `Agent "${name}" was stopped`, { agent: name });
 
 	// Update task — mark as failed if no other agents for this task are still active
@@ -1571,6 +1577,8 @@ export async function cleanAgent(name: string): Promise<void> {
 		});
 		markRead(msg.id);
 	}
+	// Catch any remaining unread mail (e.g., arrived between checkMail and the loop above)
+	markAllMailRead(name);
 
 	// Only remove worktree if agent had a dedicated one (scouts/reviewers use main worktree)
 	if (agent.branch && agent.branch !== '') {
