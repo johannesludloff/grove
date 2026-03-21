@@ -2,7 +2,7 @@
 
 import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
-import type { Task, TaskStatus } from "./types.ts";
+import type { ResearchStatus, Task, TaskStatus } from "./types.ts";
 
 /** Create a new task */
 export function createTask(opts: {
@@ -55,6 +55,8 @@ export function createTask(opts: {
 		status: initialStatus,
 		assignedTo: null,
 		parentTaskId: opts.parentTaskId ?? null,
+		context: "",
+		researchStatus: "pending",
 		retryCount: 0,
 		lockedBy: null,
 		lockedAt: null,
@@ -73,6 +75,7 @@ export function getTask(taskId: string): Task | null {
 	const row = db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
+			        parent_task_id as parentTaskId, context, research_status as researchStatus,
 			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
 			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks WHERE task_id = ?`,
@@ -122,6 +125,38 @@ export function updateTask(
 	}
 }
 
+/** Set the context (gathered research) for a task */
+export function setTaskContext(taskId: string, context: string): void {
+	const db = getDb();
+	const result = db
+		.prepare(
+			`UPDATE tasks SET context = ?, updated_at = datetime('now') WHERE task_id = ?`,
+		)
+		.run(context, taskId);
+
+	if (result.changes === 0) {
+		throw new Error(`Task "${taskId}" not found`);
+	}
+
+	emit("task.context_updated", `Task "${taskId}" context updated (${context.length} chars)`);
+}
+
+/** Update the research status of a task */
+export function updateResearchStatus(taskId: string, researchStatus: ResearchStatus): void {
+	const db = getDb();
+	const result = db
+		.prepare(
+			`UPDATE tasks SET research_status = ?, updated_at = datetime('now') WHERE task_id = ?`,
+		)
+		.run(researchStatus, taskId);
+
+	if (result.changes === 0) {
+		throw new Error(`Task "${taskId}" not found`);
+	}
+
+	emit("task.research_status", `Task "${taskId}" research status → ${researchStatus}`);
+}
+
 /** List tasks, optionally filtered by status */
 export function listTasks(status?: TaskStatus): Task[] {
 	const db = getDb();
@@ -131,6 +166,7 @@ export function listTasks(status?: TaskStatus): Task[] {
 	return db
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
+			        parent_task_id as parentTaskId, context, research_status as researchStatus,
 			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
 			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks ${where} ORDER BY created_at DESC`,

@@ -16,6 +16,8 @@ export type EventType =
 	| "task.archived"
 	| "task.checkout"
 	| "task.release"
+	| "task.context_updated"
+	| "task.research_status"
 	| "mail.sent"
 	| "memory.added"
 	| "merge.enqueued"
