@@ -5,7 +5,7 @@ import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, markAllMailRead } from "./mail.ts";
 import { queryMemories, renderMemories, markUsed } from "./memory.ts";
-import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask, getGoalAncestry } from "./tasks.ts";
+import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask, getGoalAncestry, buildPriorResultsBlock } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
 import { createWorktree, removeWorktree, branchExists } from "./worktree.ts";
@@ -476,6 +476,7 @@ export async function spawnAgent(opts: {
 			: "";
 		const priorWorkBlock = buildPriorWorkBlock(opts.taskId, opts.name);
 		const checkpointBlock = buildCheckpointBlock(opts.taskId, opts.name);
+		const priorResultsBlock = buildPriorResultsBlock(opts.taskId, opts.name);
 		const goalAncestryBlock = buildGoalAncestryBlock(opts.taskId);
 
 		// Include scout findings for builders and leads (scouts don't need their own findings)
@@ -501,6 +502,7 @@ export async function spawnAgent(opts: {
 			scoutFindingsBlock,
 			fileOwnershipBlock,
 			checkpointBlock,
+			priorResultsBlock,
 			goalAncestryBlock,
 			opts.parentName,
 			depth,
@@ -941,6 +943,7 @@ function buildPrompt(
 	scoutFindingsBlock: string,
 	fileOwnershipBlock: string,
 	checkpointBlock: string,
+	priorResultsBlock: string,
 	goalAncestryBlock: string,
 	parentName?: string,
 	depth?: number,
@@ -963,6 +966,7 @@ function buildPrompt(
 		priorFindings: scoutFindingsBlock,
 		fileScope: fileOwnershipBlock,
 		checkpointBlock,
+		priorResultsBlock,
 		goalAncestryBlock,
 		skipScout,
 		skipReview,

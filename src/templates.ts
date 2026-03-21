@@ -21,6 +21,7 @@ export interface TemplateVars {
 	sibling_block: string;
 	prior_work_block: string;
 	goal_ancestry_block: string;
+	prior_results_block: string;
 	skip_scout: string;
 	skip_review: string;
 }
@@ -137,6 +138,7 @@ export function buildPromptFromTemplate(opts: {
 	siblingBlock?: string;
 	priorWorkBlock?: string;
 	goalAncestryBlock?: string;
+	priorResultsBlock?: string;
 	skipScout?: boolean;
 	skipReview?: boolean;
 }): string {
@@ -158,6 +160,7 @@ export function buildPromptFromTemplate(opts: {
 		sibling_block: opts.siblingBlock ? `\n${opts.siblingBlock}\n` : "",
 		prior_work_block: opts.priorWorkBlock ? `\n${opts.priorWorkBlock}\n` : "",
 		goal_ancestry_block: opts.goalAncestryBlock ?? "",
+		prior_results_block: opts.priorResultsBlock || "",
 		skip_scout: opts.skipScout ? "true" : "",
 		skip_review: opts.skipReview ? "true" : "",
 	};
