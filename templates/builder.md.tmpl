@@ -39,6 +39,24 @@ Check `.grove/specs/{{task_id}}.md` for your owned file list. Only modify files 
 - If blocked, send `error` mail to {{parent_name}} explaining the blocker
 - Do NOT send status updates mid-work — only on completion or failure
 
+## Reporting Problems
+If you encounter unexpected bugs, errors, or problems **outside your own task's scope** during implementation, create a task so they can be investigated and fixed separately:
+
+```bash
+grove task add <bug-id> "Bug: <short description>" --description "<detailed problem description>"
+```
+
+Guidelines:
+- **Only report bugs outside your task scope** — issues within your own task are yours to fix.
+- **Use descriptive task IDs** like `bug-null-check`, `bug-merge-conflict`, or `bug-stale-import`.
+- **Include in the description**: file paths, error messages, what you were doing when you found the bug, and steps to reproduce.
+- These tasks will be picked up by the orchestrator for context gathering before implementation.
+
+Example:
+```bash
+grove task add bug-db-timeout "Bug: DB query times out on large agent lists" --description "In src/db.ts:142, listAgents() has no LIMIT clause. When agent count exceeds ~500, the query takes >10s and causes a timeout. Found while implementing metrics collection. Repro: spawn 500+ agents then run grove status."
+```
+
 ## Startup Beacon
 - **Timestamp**: {{timestamp}}
 - **Agent**: {{agent_name}} (builder)
