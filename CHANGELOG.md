@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-03-21
+
+### Fixed
+- Resolve 4 bugs causing stale tasks on dashboard (archived task filtering, task auto-complete, archive blocking, stale task reconciliation)
+- Clean orphaned agents whose branches were manually deleted
+- Mark unread mail as read when agents stop, exit, or get cleaned
+
 ## [0.4.1] - 2026-03-19
 
 ### Fixed
