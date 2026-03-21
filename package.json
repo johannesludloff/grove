@@ -10,7 +10,8 @@
 	"scripts": {
 		"dev": "bun run src/index.ts",
 		"test": "bun test",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"sync-claude-md": "bun scripts/sync-claude-md.ts"
 	},
 	"private": true,
 	"dependencies": {
