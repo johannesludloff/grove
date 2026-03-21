@@ -6,7 +6,7 @@ import { closeDb, getDb, groveDir, initDb } from "./db.ts";
 import { getCurrentBranch, isGitRepo, initGitRepo, branchExists } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, checkoutTask, releaseTask, getTaskDependencies } from "./tasks.ts";
+import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, checkoutTask, releaseTask, getTaskDependencies, setTaskContext, updateResearchStatus, logExperimentResult, getExperimentResults, claimExperiment, getTaskClaims, setMaxIterations } from "./tasks.ts";
 import { spawnAgent, stopAgent, listAgents, cleanAgent, reconcileZombies, getAgentByWorktree, isPidAlive, getAgentSessionId } from "./agent.ts";
 import { emit } from "./events.ts";
 import { sendMail, checkMail, markRead, listMail, hasMergeReadyMail } from "./mail.ts";
@@ -22,7 +22,7 @@ import { collectBenchmarks, storeBenchmarkRun, getPreviousRun, displayReport, li
 import { startWatchdog, stopWatchdog, isWatchdogRunning } from "./watchdog.ts";
 import { runHealthChecks, formatHealthReport } from "./health.ts";
 import { writeCheckpoint, readCheckpoint, autoCheckpointFromTool } from "./checkpoint.ts";
-import type { AgentCapability, MailType, TaskStatus, MergeTier } from "./types.ts";
+import type { AgentCapability, MailType, TaskStatus, MergeTier, ResearchStatus, ExperimentOutcome } from "./types.ts";
 import type { MemoryType } from "./memory.ts";
 import type { Checkpoint } from "./checkpoint.ts";
 import { maybeNotifyUpdate, runUpdate, getGroveVersion } from "./update.ts";
@@ -222,6 +222,173 @@ taskCmd
 		const holder = task.lockedBy;
 		releaseTask(taskId);
 		console.log(`Task "${taskId}" released (was locked by "${holder}").`);
+	});
+
+// ── autoresearch helpers ────────────────────────────────────────────────
+
+function detectAgentName(): string {
+	try {
+		const result = Bun.spawnSync({ cmd: ["git", "rev-parse", "--abbrev-ref", "HEAD"], stdout: "pipe" });
+		const branch = result.stdout.toString().trim();
+		if (branch.startsWith("grove/")) return branch.slice(6);
+		return "manual";
+	} catch { return "manual"; }
+}
+
+// ── autoresearch task subcommands ──────────────────────────────────────
+
+taskCmd
+	.command("context")
+	.description("Get or set a task's context")
+	.argument("<task-id>", "Task ID")
+	.argument("[text]", "Context text (omit to read current context)")
+	.action((taskId: string, text?: string) => {
+		if (text) {
+			try {
+				setTaskContext(taskId, text);
+				console.log(`Context set for task "${taskId}" (${text.length} chars).`);
+			} catch (err: unknown) {
+				console.error((err as Error).message);
+				process.exit(1);
+			}
+		} else {
+			const task = getTask(taskId);
+			if (!task) {
+				console.error(`Task "${taskId}" not found.`);
+				process.exit(1);
+			}
+			console.log(task.context || "No context set");
+		}
+	});
+
+taskCmd
+	.command("research-status")
+	.description("Update a task's research status")
+	.argument("<task-id>", "Task ID")
+	.argument("<status>", "Research status (pending/in_progress/researched)")
+	.action((taskId: string, status: string) => {
+		const valid: ResearchStatus[] = ["pending", "in_progress", "researched"];
+		if (!valid.includes(status as ResearchStatus)) {
+			console.error(`Invalid research status "${status}". Valid: ${valid.join(", ")}`);
+			process.exit(1);
+		}
+		try {
+			updateResearchStatus(taskId, status as ResearchStatus);
+			console.log(`Task "${taskId}" research status → ${status}`);
+		} catch (err: unknown) {
+			console.error((err as Error).message);
+			process.exit(1);
+		}
+	});
+
+taskCmd
+	.command("show")
+	.description("Show detailed task information")
+	.argument("<task-id>", "Task ID")
+	.action((taskId: string) => {
+		const task = getTask(taskId);
+		if (!task) {
+			console.error(`Task "${taskId}" not found.`);
+			process.exit(1);
+		}
+		const contextPreview = task.context ? task.context.slice(0, 200) : "none";
+		const iterLimit = task.maxIterations > 0 ? String(task.maxIterations) : "unlimited";
+		console.log(`Task: ${task.taskId}`);
+		console.log(`Title: ${task.title}`);
+		console.log(`Status: ${task.status}`);
+		console.log(`Research: ${task.researchStatus}`);
+		console.log(`Assigned: ${task.assignedTo || "none"}`);
+		console.log(`Context: ${contextPreview}`);
+		console.log(`Iterations: ${task.iterationCount}/${iterLimit}`);
+		console.log(`Created: ${task.createdAt}`);
+	});
+
+taskCmd
+	.command("result")
+	.description("Log an experiment result")
+	.argument("<task-id>", "Task ID")
+	.requiredOption("--approach <text>", "Approach description")
+	.requiredOption("--outcome <outcome>", "Outcome (success/failure/partial)")
+	.option("--detail <text>", "Additional detail")
+	.action((taskId: string, opts: { approach: string; outcome: string; detail?: string }) => {
+		const validOutcomes: ExperimentOutcome[] = ["success", "failure", "partial"];
+		if (!validOutcomes.includes(opts.outcome as ExperimentOutcome)) {
+			console.error(`Invalid outcome "${opts.outcome}". Valid: ${validOutcomes.join(", ")}`);
+			process.exit(1);
+		}
+		const agentName = detectAgentName();
+		const result = logExperimentResult({
+			taskId,
+			agentName,
+			approach: opts.approach,
+			outcome: opts.outcome as ExperimentOutcome,
+			detail: opts.detail,
+		});
+		console.log(`Experiment logged: ${result.approach} → ${result.outcome} (by ${agentName})`);
+	});
+
+taskCmd
+	.command("results")
+	.description("Show experiment results for a task")
+	.argument("<task-id>", "Task ID")
+	.action((taskId: string) => {
+		const results = getExperimentResults(taskId);
+		if (results.length === 0) {
+			console.log("No experiment results.");
+			return;
+		}
+		console.log(`${"Agent".padEnd(20)} ${"Approach".padEnd(30)} ${"Outcome".padEnd(10)} ${"Detail".padEnd(30)} Created`);
+		console.log("-".repeat(120));
+		for (const r of results) {
+			const detail = r.detail ? r.detail.slice(0, 30) : "";
+			console.log(`${r.agentName.padEnd(20)} ${r.approach.padEnd(30)} ${r.outcome.padEnd(10)} ${detail.padEnd(30)} ${r.createdAt}`);
+		}
+	});
+
+taskCmd
+	.command("claim")
+	.description("Claim an experiment approach")
+	.argument("<task-id>", "Task ID")
+	.argument("<approach>", "Approach to claim")
+	.action((taskId: string, approach: string) => {
+		const agentName = detectAgentName();
+		const result = claimExperiment({ taskId, agentName, approach });
+		if (result.success) {
+			console.log(`Claimed "${approach}" on task "${taskId}" for ${agentName}.`);
+		} else {
+			console.error(`Already claimed by ${result.claimedBy}`);
+			process.exit(1);
+		}
+	});
+
+taskCmd
+	.command("claims")
+	.description("Show active claims for a task")
+	.argument("<task-id>", "Task ID")
+	.action((taskId: string) => {
+		const claims = getTaskClaims(taskId);
+		if (claims.length === 0) {
+			console.log("No active claims.");
+			return;
+		}
+		for (const c of claims) {
+			console.log(`  [${c.status}] ${c.approach} — claimed by ${c.agentName} (${c.createdAt})`);
+		}
+	});
+
+taskCmd
+	.command("budget")
+	.description("Set max iterations for a task")
+	.argument("<task-id>", "Task ID")
+	.argument("<max>", "Maximum iteration count")
+	.action((taskId: string, max: string) => {
+		const n = parseInt(max, 10);
+		if (isNaN(n) || n < 0) {
+			console.error(`Invalid max iterations: "${max}". Must be a non-negative integer.`);
+			process.exit(1);
+		}
+		setMaxIterations(taskId, n);
+		console.log(`Task "${taskId}" max iterations set to ${n}.`);
 	});
 
 // ── grove spawn ─────────────────────────────────────────────────────────
