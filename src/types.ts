@@ -38,6 +38,9 @@ export interface Mail {
 
 export type MailType = "status" | "question" | "result" | "error" | "done" | "merge_ready";
 
+/** Research state for a task */
+export type ResearchStatus = "pending" | "in_progress" | "researched";
+
 /** Task in the task queue */
 export interface Task {
 	id: number;
@@ -47,6 +50,8 @@ export interface Task {
 	status: TaskStatus;
 	assignedTo: string | null;
 	parentTaskId: string | null;
+	context: string;
+	researchStatus: ResearchStatus;
 	retryCount: number;
 	lockedBy: string | null;
 	lockedAt: string | null;

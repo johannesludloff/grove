@@ -184,6 +184,8 @@ function shortEventType(type: EventType): string {
 		"task.archived": "arch",
 		"task.checkout": "lock",
 		"task.release": "unlk",
+		"task.context_updated": "ctx+",
+		"task.research_status": "rsch",
 		"mail.sent": "sent",
 		"memory.added": "mem+",
 		"merge.enqueued": "mrgq",

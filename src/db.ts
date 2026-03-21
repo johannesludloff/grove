@@ -92,6 +92,9 @@ function ensureTables(db: Database): void {
 			description TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
 			assigned_to TEXT,
+			parent_task_id TEXT,
+			context TEXT NOT NULL DEFAULT '',
+			research_status TEXT NOT NULL DEFAULT 'pending',
 			retry_count INTEGER NOT NULL DEFAULT 0,
 			locked_by TEXT,
 			locked_at TEXT,
@@ -171,6 +174,27 @@ function ensureTables(db: Database): void {
 	// Migrate: add session_id column to agents for --resume support
 	try {
 		db.exec("ALTER TABLE agents ADD COLUMN session_id TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add parent_task_id column to tasks (was referenced but never created)
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add context column to tasks for storing research context
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add research_status column to tasks
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN research_status TEXT NOT NULL DEFAULT 'pending'");
 	} catch {
 		// Column already exists — ignore
 	}
