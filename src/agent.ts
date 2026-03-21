@@ -540,12 +540,43 @@ export async function spawnAgent(opts: {
 
 		proc = Bun.spawn(args, {
 			cwd: worktreePath,
-			stdout: Bun.file(`${logDir}/stdout.txt`),
-			stderr: Bun.file(`${logDir}/stderr.log`),
+			stdout: "pipe",
+			stderr: "pipe",
 			// Only pipe prompt via stdin for fresh sessions; resumed sessions don't need it
 			stdin: isResume ? undefined : "pipe",
 			env: Object.fromEntries(Object.entries({ ...process.env, GROVE_AGENT: "1", GROVE_AGENT_NAME: opts.name }).filter(([k]) => k !== "CLAUDECODE")),
 		});
+
+		// Pipe stdout to file (flush each chunk so activity poller sees incremental output)
+		if (proc.stdout) {
+			const stdoutWriter = Bun.file(`${logDir}/stdout.txt`).writer();
+			(async () => {
+				const reader = (proc!.stdout as ReadableStream<Uint8Array>).getReader();
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					stdoutWriter.write(value);
+					stdoutWriter.flush();
+				}
+				stdoutWriter.end();
+			})();
+		}
+
+		// Pipe stderr to file
+		if (proc.stderr) {
+			const stderrWriter = Bun.file(`${logDir}/stderr.log`).writer();
+			(async () => {
+				const reader = (proc!.stderr as ReadableStream<Uint8Array>).getReader();
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					stderrWriter.write(value);
+					stderrWriter.flush();
+				}
+				stderrWriter.end();
+			})();
+		}
+
 		// Write prompt to stdin manually (only for fresh sessions, not resume)
 		if (!isResume && proc.stdin) {
 			const promptContent = await Bun.file(promptFile).text();
