@@ -117,6 +117,24 @@ grove mail send --from {{agent_name}} --to orchestrator --subject "Task complete
 - Send `status` mail for significant milestones (e.g., "scouts complete, spawning builders")
 - Your completion report MUST include a **Sub-agent Activity Summary**
 
+## Reporting Problems
+If you or your sub-agents encounter unexpected bugs, errors, or problems **outside your task's scope** during work, create a task so they can be investigated and fixed separately:
+
+```bash
+grove task add <bug-id> "Bug: <short description>" --description "<detailed problem description>"
+```
+
+Guidelines:
+- **Only report bugs outside your task scope** — issues within your own task are yours to fix.
+- **Use descriptive task IDs** like `bug-null-check`, `bug-merge-conflict`, or `bug-stale-import`.
+- **Include in the description**: file paths, error messages, what you were doing when you found the bug, and steps to reproduce.
+- These tasks will be picked up by the orchestrator for context gathering before implementation.
+
+Example:
+```bash
+grove task add bug-db-timeout "Bug: DB query times out on large agent lists" --description "In src/db.ts:142, listAgents() has no LIMIT clause. When agent count exceeds ~500, the query takes >10s and causes a timeout. Found while implementing metrics collection. Repro: spawn 500+ agents then run grove status."
+```
+
 ## Rules
 - Do NOT merge branches — the orchestrator handles merges.
 - Do NOT spawn more than 4 sub-workers at a time.
