@@ -2,7 +2,7 @@
 
 import { getDb } from "./db.ts";
 import { emit } from "./events.ts";
-import type { ResearchStatus, Task, TaskStatus } from "./types.ts";
+import type { ExperimentClaim, ExperimentOutcome, ExperimentResult, ResearchStatus, Task, TaskStatus } from "./types.ts";
 
 /** Create a new task */
 export function createTask(opts: {
@@ -396,4 +396,173 @@ export function getTaskDependencies(taskId: string): string[] {
 		.prepare("SELECT depends_on FROM task_dependencies WHERE task_id = ?")
 		.all(taskId) as { depends_on: string }[];
 	return rows.map((r) => r.depends_on);
+}
+
+/** Log the result of an autoresearch experiment */
+export function logExperimentResult(opts: {
+	taskId: string;
+	agentName: string;
+	approach: string;
+	outcome: ExperimentOutcome;
+	metricName?: string;
+	metricValue?: number;
+	detail?: string;
+}): ExperimentResult {
+	const db = getDb();
+
+	const stmt = db.prepare(`
+		INSERT INTO experiment_results (task_id, agent_name, approach, outcome, metric_name, metric_value, detail)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`);
+	const result = stmt.run(
+		opts.taskId,
+		opts.agentName,
+		opts.approach,
+		opts.outcome,
+		opts.metricName ?? null,
+		opts.metricValue ?? null,
+		opts.detail ?? "",
+	);
+
+	const row = db
+		.prepare(
+			`SELECT id, task_id as taskId, agent_name as agentName, approach, outcome,
+			        metric_name as metricName, metric_value as metricValue, detail,
+			        created_at as createdAt
+			 FROM experiment_results WHERE id = ?`,
+		)
+		.get(result.lastInsertRowid) as ExperimentResult;
+
+	emit("task.experiment_logged", `Experiment on "${opts.taskId}" by ${opts.agentName}: ${opts.approach} → ${opts.outcome}`);
+
+	return row;
+}
+
+/** Get experiment results for a task */
+export function getExperimentResults(taskId: string, limit: number = 20): ExperimentResult[] {
+	const db = getDb();
+
+	return db
+		.prepare(
+			`SELECT id, task_id as taskId, agent_name as agentName, approach, outcome,
+			        metric_name as metricName, metric_value as metricValue, detail,
+			        created_at as createdAt
+			 FROM experiment_results WHERE task_id = ? ORDER BY created_at DESC LIMIT ?`,
+		)
+		.all(taskId, limit) as ExperimentResult[];
+}
+
+/** Claim an experiment approach to prevent duplicate work */
+export function claimExperiment(opts: {
+	taskId: string;
+	agentName: string;
+	approach: string;
+}): { success: boolean; claimedBy?: string } {
+	const db = getDb();
+
+	try {
+		db.prepare(
+			`INSERT INTO experiment_claims (task_id, agent_name, approach, status)
+			 VALUES (?, ?, ?, 'claimed')`,
+		).run(opts.taskId, opts.agentName, opts.approach);
+
+		emit("task.experiment_claimed", `Experiment "${opts.approach}" on "${opts.taskId}" claimed by ${opts.agentName}`);
+		return { success: true };
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (message.includes("UNIQUE constraint failed")) {
+			const existing = db
+				.prepare(
+					`SELECT agent_name FROM experiment_claims
+					 WHERE task_id = ? AND approach = ? AND status = 'claimed'`,
+				)
+				.get(opts.taskId, opts.approach) as { agent_name: string } | null;
+
+			return { success: false, claimedBy: existing?.agent_name };
+		}
+		throw err;
+	}
+}
+
+/** Release a claim on an experiment approach */
+export function releaseClaim(taskId: string, agentName: string): void {
+	const db = getDb();
+	db.prepare(
+		`UPDATE experiment_claims SET status = 'abandoned'
+		 WHERE task_id = ? AND agent_name = ? AND status = 'claimed'`,
+	).run(taskId, agentName);
+}
+
+/** Get active claims for a task */
+export function getTaskClaims(taskId: string): ExperimentClaim[] {
+	const db = getDb();
+
+	return db
+		.prepare(
+			`SELECT id, task_id as taskId, agent_name as agentName, approach,
+			        status, created_at as createdAt
+			 FROM experiment_claims WHERE task_id = ? AND status = 'claimed'
+			 ORDER BY created_at DESC`,
+		)
+		.all(taskId) as ExperimentClaim[];
+}
+
+/** Increment the iteration count for a task and check budget */
+export function incrementIterationCount(taskId: string): { count: number; max: number; exhausted: boolean } {
+	const db = getDb();
+
+	db.prepare(
+		`UPDATE tasks SET iteration_count = iteration_count + 1, updated_at = datetime('now') WHERE task_id = ?`,
+	).run(taskId);
+
+	const row = db
+		.prepare("SELECT iteration_count, max_iterations FROM tasks WHERE task_id = ?")
+		.get(taskId) as { iteration_count: number; max_iterations: number } | null;
+
+	const count = row?.iteration_count ?? 0;
+	const max = row?.max_iterations ?? 0;
+	const exhausted = max > 0 && count >= max;
+
+	if (exhausted) {
+		emit("task.budget_exhausted", `Task "${taskId}" exhausted iteration budget (${count}/${max})`);
+	}
+
+	return { count, max, exhausted };
+}
+
+/** Set the maximum number of iterations for a task */
+export function setMaxIterations(taskId: string, maxIterations: number): void {
+	const db = getDb();
+	db.prepare(
+		`UPDATE tasks SET max_iterations = ?, updated_at = datetime('now') WHERE task_id = ?`,
+	).run(maxIterations, taskId);
+}
+
+/** Build a markdown block summarizing prior experiment results from other agents */
+export function buildPriorResultsBlock(taskId: string, selfName: string): string {
+	const db = getDb();
+
+	const rows = db
+		.prepare(
+			`SELECT approach, outcome, detail
+			 FROM experiment_results WHERE task_id = ? AND agent_name != ?
+			 ORDER BY created_at DESC LIMIT 10`,
+		)
+		.all(taskId, selfName) as { approach: string; outcome: string; detail: string }[];
+
+	if (rows.length === 0) {
+		return "";
+	}
+
+	const lines: string[] = [
+		"## Prior Experiment Results",
+		"| Approach | Outcome | Detail |",
+		"|----------|---------|--------|",
+	];
+
+	for (const row of rows) {
+		lines.push(`| ${row.approach} | ${row.outcome} | ${row.detail} |`);
+	}
+
+	return lines.join("\n");
 }
