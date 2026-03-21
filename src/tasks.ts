@@ -58,6 +58,8 @@ export function createTask(opts: {
 		context: "",
 		researchStatus: "pending",
 		retryCount: 0,
+		maxIterations: 0,
+		iterationCount: 0,
 		lockedBy: null,
 		lockedAt: null,
 		createdAt: new Date().toISOString(),
@@ -76,7 +78,8 @@ export function getTask(taskId: string): Task | null {
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
 			        parent_task_id as parentTaskId, context, research_status as researchStatus,
-			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
+			        retry_count as retryCount, max_iterations as maxIterations,
+			        iteration_count as iterationCount, locked_by as lockedBy, locked_at as lockedAt,
 			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks WHERE task_id = ?`,
 		)
@@ -167,7 +170,8 @@ export function listTasks(status?: TaskStatus): Task[] {
 		.prepare(
 			`SELECT id, task_id as taskId, title, description, status, assigned_to as assignedTo,
 			        parent_task_id as parentTaskId, context, research_status as researchStatus,
-			        retry_count as retryCount, locked_by as lockedBy, locked_at as lockedAt,
+			        retry_count as retryCount, max_iterations as maxIterations,
+			        iteration_count as iterationCount, locked_by as lockedBy, locked_at as lockedAt,
 			        created_at as createdAt, updated_at as updatedAt
 		   FROM tasks ${where} ORDER BY created_at DESC`,
 		)

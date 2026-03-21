@@ -53,6 +53,8 @@ export interface Task {
 	context: string;
 	researchStatus: ResearchStatus;
 	retryCount: number;
+	maxIterations: number;
+	iterationCount: number;
 	lockedBy: string | null;
 	lockedAt: string | null;
 	createdAt: string;
@@ -117,5 +119,34 @@ export interface ToolMetric {
 	agentName: string;
 	toolName: string;
 	success: boolean;
+	createdAt: string;
+}
+
+/** Outcome of an autoresearch experiment */
+export type ExperimentOutcome = "success" | "failure" | "partial";
+
+/** Recorded result of an experiment approach */
+export interface ExperimentResult {
+	id: number;
+	taskId: string;
+	agentName: string;
+	approach: string;
+	outcome: ExperimentOutcome;
+	metricName: string | null;
+	metricValue: number | null;
+	detail: string;
+	createdAt: string;
+}
+
+/** Status of an experiment claim */
+export type ClaimStatus = "claimed" | "completed" | "abandoned";
+
+/** Claim on an experiment approach (prevents duplicate work) */
+export interface ExperimentClaim {
+	id: number;
+	taskId: string;
+	agentName: string;
+	approach: string;
+	status: ClaimStatus;
 	createdAt: string;
 }

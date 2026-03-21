@@ -148,6 +148,33 @@ function ensureTables(db: Database): void {
 
 		CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
 		CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on);
+
+		CREATE TABLE IF NOT EXISTS experiment_results (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			agent_name TEXT NOT NULL,
+			approach TEXT NOT NULL,
+			outcome TEXT NOT NULL CHECK(outcome IN ('success', 'failure', 'partial')),
+			metric_name TEXT,
+			metric_value REAL,
+			detail TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_experiment_results_task ON experiment_results(task_id);
+		CREATE INDEX IF NOT EXISTS idx_experiment_results_agent ON experiment_results(agent_name);
+
+		CREATE TABLE IF NOT EXISTS experiment_claims (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			agent_name TEXT NOT NULL,
+			approach TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'claimed' CHECK(status IN ('claimed', 'completed', 'abandoned')),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(task_id, approach)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_experiment_claims_task ON experiment_claims(task_id);
 	`);
 
 	// Migrate: add last_activity_at column if it doesn't exist yet
@@ -195,6 +222,20 @@ function ensureTables(db: Database): void {
 	// Migrate: add research_status column to tasks
 	try {
 		db.exec("ALTER TABLE tasks ADD COLUMN research_status TEXT NOT NULL DEFAULT 'pending'");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add max_iterations column to tasks for autoresearch
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN max_iterations INTEGER NOT NULL DEFAULT 0");
+	} catch {
+		// Column already exists — ignore
+	}
+
+	// Migrate: add iteration_count column to tasks for autoresearch
+	try {
+		db.exec("ALTER TABLE tasks ADD COLUMN iteration_count INTEGER NOT NULL DEFAULT 0");
 	} catch {
 		// Column already exists — ignore
 	}
