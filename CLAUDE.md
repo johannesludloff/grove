@@ -98,6 +98,16 @@ When you see agent completion/failure mail at the start of your turn:
 
 `grove merge --all` runs `tsc --noEmit` after all branches are merged and reports pass/fail. Use `--review` to auto-spawn a reviewer for integration review after merge.
 
+## Experiment Tracking
+
+Agents log experiment results to a shared database, enabling learning across attempts:
+
+- **Results logging**: Agents record what they tried, whether it worked, and why. Use `grove task result` to log.
+- **Prior results injection**: When agents spawn, they see a summary of prior experiments for their task — avoiding repeated failures.
+- **Experiment claiming**: Parallel agents claim approaches to prevent duplicate work. Use `grove task claim` before starting.
+- **Iteration budgets**: Tasks can have a `max_iterations` limit. Use `grove task budget` to set. Agents stop when exhausted.
+- **Ratcheting**: Builders auto-revert failed changes and try new approaches, logging each attempt.
+
 ## Spec Files
 
 For non-trivial builder tasks, leads write spec files at `.grove/specs/<task-id>.md`:
@@ -144,6 +154,13 @@ grove spawn subtask -n impl-builder -c builder --parent my-lead
 | `grove task add <id> <title> [-d "<desc>"]` | Create a task |
 | `grove task update <id> -s <status>` | Update task status (pending/in_progress/completed/failed/archived) |
 | `grove task list [-s <status>] [-a]` | List tasks (use `-a` for all including archived) |
+| `grove task show <id>` | Show full task details |
+| `grove task context <id> [text]` | Set/show task research context |
+| `grove task result <id> --approach --outcome` | Log experiment result |
+| `grove task results <id>` | List experiment results for task |
+| `grove task claim <id> <approach>` | Claim experiment approach |
+| `grove task claims <id>` | List active claims for task |
+| `grove task budget <id> <max>` | Set iteration budget |
 
 ### Agents
 | Command | Description |
