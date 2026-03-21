@@ -18,7 +18,7 @@ import { getDb, groveDir } from "./db.ts";
 import { recentEvents, type EventType, type GroveEvent } from "./events.ts";
 import { listMail } from "./mail.ts";
 import { listMemories } from "./memory.ts";
-import { listTasks } from "./tasks.ts";
+import { listTasks, reconcileStaleTasks } from "./tasks.ts";
 import type { Agent, AgentStatus, Mail, Task } from "./types.ts";
 import type { Memory } from "./memory.ts";
 
@@ -611,8 +611,9 @@ function renderDashboard(): void {
 	const width = process.stdout.columns ?? 100;
 	const height = process.stdout.rows ?? 30;
 
+	reconcileStaleTasks();
 	const agents = listAgents();
-	const tasks = listTasks();
+	const tasks = listTasks().filter((t) => t.status !== "archived");
 	const unreadMail = listMail({ unread: true });
 	const memories = listMemories();
 	const events = recentEvents(30);

@@ -174,8 +174,40 @@ export function listTasks(status?: TaskStatus): Task[] {
 		.all(...params) as Task[];
 }
 
+/** Reconcile stale in_progress tasks whose agents are all in terminal states */
+export function reconcileStaleTasks(): string[] {
+	const db = getDb();
+	// Find in_progress tasks where ALL agents are in terminal states
+	const stale = db
+		.prepare(
+			`SELECT t.task_id as taskId FROM tasks t
+			 WHERE t.status = 'in_progress'
+			   AND EXISTS (
+			     SELECT 1 FROM agents a WHERE a.task_id = t.task_id
+			   )
+			   AND NOT EXISTS (
+			     SELECT 1 FROM agents a
+			     WHERE a.task_id = t.task_id
+			       AND a.status NOT IN ('completed', 'stopped', 'failed', 'cleaned')
+			   )`,
+		)
+		.all() as { taskId: string }[];
+
+	const reconciled: string[] = [];
+	for (const { taskId } of stale) {
+		db.prepare(
+			"UPDATE tasks SET status = 'completed', updated_at = datetime('now') WHERE task_id = ?",
+		).run(taskId);
+		reconciled.push(taskId);
+		emit("task.completed", `Task "${taskId}" auto-completed (all agents terminal)`);
+	}
+
+	return reconciled;
+}
+
 /** Archive completed/failed tasks that have no active agents */
 export function archiveCompletedTasks(): string[] {
+	reconcileStaleTasks();
 	const db = getDb();
 	// Find tasks that are completed or failed and have no running/spawning agents
 	const archivable = db
@@ -185,7 +217,7 @@ export function archiveCompletedTasks(): string[] {
 			   AND NOT EXISTS (
 			     SELECT 1 FROM agents a
 			     WHERE a.task_id = t.task_id
-			       AND a.status IN ('running', 'spawning', 'completed')
+			       AND a.status IN ('running', 'spawning')
 			   )`,
 		)
 		.all() as { taskId: string }[];
