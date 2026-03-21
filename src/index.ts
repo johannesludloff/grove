@@ -3,7 +3,7 @@
 
 import { Command } from "commander";
 import { closeDb, getDb, groveDir, initDb } from "./db.ts";
-import { getCurrentBranch, isGitRepo, initGitRepo } from "./worktree.ts";
+import { getCurrentBranch, isGitRepo, initGitRepo, branchExists } from "./worktree.ts";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createTask, getTask, listTasks, updateTask, archiveCompletedTasks, checkoutTask, releaseTask, getTaskDependencies } from "./tasks.ts";
@@ -948,8 +948,19 @@ program
 
 			// Partition agents into cleanable vs skipped
 			const toClean: typeof agents = [];
+			const db = getDb();
 			for (const a of agents) {
 				if (a.status === "completed" || a.status === "stopped" || a.status === "failed") {
+					// If the branch and worktree have already been deleted (manual cleanup),
+					// mark the agent as cleaned directly — no merge check needed.
+					if (a.branch && a.branch !== '' && !branchExists(a.branch)) {
+						const worktreePath = `${process.cwd()}/.grove/worktrees/${a.name}`;
+						if (!existsSync(worktreePath)) {
+							db.prepare("UPDATE agents SET status = 'cleaned', updated_at = datetime('now') WHERE name = ?").run(a.name);
+							console.log(`  Cleaned (orphaned): ${a.name}`);
+							continue;
+						}
+					}
 					if (a.status === "completed" && a.branch !== '' && !mergedBranches.has(a.branch)) {
 						console.log(
 							`  Skipping ${a.name}: branch ${a.branch} has not been merged. Run 'grove merge --all' first.`,

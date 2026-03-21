@@ -97,6 +97,20 @@ export async function listWorktrees(): Promise<string[]> {
 	return worktrees;
 }
 
+/** Check if a git branch exists */
+export function branchExists(branchName: string): boolean {
+	try {
+		const proc = Bun.spawnSync(["git", "rev-parse", "--verify", branchName], {
+			cwd: process.cwd(),
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		return proc.exitCode === 0;
+	} catch {
+		return false;
+	}
+}
+
 /** Check if the current directory is inside a git repository */
 export async function isGitRepo(): Promise<boolean> {
 	const proc = Bun.spawn(["git", "rev-parse", "--git-dir"], {

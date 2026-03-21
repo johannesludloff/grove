@@ -8,7 +8,7 @@ import { queryMemories, renderMemories, markUsed } from "./memory.ts";
 import { getTask, incrementRetryCount, updateTask, checkoutTask, releaseTask, getGoalAncestry } from "./tasks.ts";
 import type { Agent, AgentCapability, AgentStatus, SpawnResult } from "./types.ts";
 import { resolveModel, resolveEffort } from "./models.ts";
-import { createWorktree, removeWorktree } from "./worktree.ts";
+import { createWorktree, removeWorktree, branchExists } from "./worktree.ts";
 import { installAgentHooks } from "./hooks.ts";
 import { buildCheckpointBlock } from "./checkpoint.ts";
 import { buildPromptFromTemplate } from "./templates.ts";
@@ -1574,7 +1574,11 @@ export async function cleanAgent(name: string): Promise<void> {
 
 	// Only remove worktree if agent had a dedicated one (scouts/reviewers use main worktree)
 	if (agent.branch && agent.branch !== '') {
-		await removeWorktree(name);
+		// Skip removal if branch and worktree are already gone (manually deleted)
+		const worktreePath = `${process.cwd()}/.grove/worktrees/${name}`;
+		if (branchExists(agent.branch) || existsSync(worktreePath)) {
+			await removeWorktree(name);
+		}
 	}
 
 	const db = getDb();
