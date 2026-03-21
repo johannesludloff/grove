@@ -53,6 +53,8 @@ The scout phase has been skipped. Proceed directly to spec & build using prior f
 {{/skip_scout}}
 
 ### Phase 2 — Spec & Build
+Before spawning builders, review prior experiment results (if shown above) to avoid repeating failed approaches.
+
 **Before spawning each builder**, write a spec file at `.grove/specs/<task-id>.md`:
 ```markdown
 # <task-id>
@@ -165,6 +167,9 @@ grove task add bug-db-timeout "Bug: DB query times out on large agent lists" --d
 {{sibling_block}}
 {{prior_work_block}}
 {{checkpoint_block}}
+{{#prior_results_block}}
+{{prior_results_block}}
+{{/prior_results_block}}
 
 ## Your Task
 {{task_description}}

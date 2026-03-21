@@ -25,6 +25,11 @@ Check `.grove/specs/{{task_id}}.md` for your owned file list. Only modify files 
 2. **Plan** — Identify the exact changes needed in your owned files
 3. **Implement** — Write the code changes
 4. **Verify** — Run `bun run typecheck` to ensure correctness
+   - If typecheck **fails**:
+     a. Revert your uncommitted changes: `git checkout -- .`
+     b. Review the Prior Experiment Results section (if any) above
+     c. Try a different approach — do NOT repeat the same approach that failed
+     d. Return to the implementation step
 5. **Commit** — Commit all changes with a descriptive message
 6. **Signal** — Send merge_ready mail to orchestrator
 
@@ -33,6 +38,7 @@ Check `.grove/specs/{{task_id}}.md` for your owned file list. Only modify files 
 - **NO_TYPECHECK** — Committing without running typecheck. Broken code wastes reviewer time.
 - **SILENT_FINISH** — Completing without sending merge_ready mail. Branch sits unmerged.
 - **BLIND_IMPL** — Implementing without reading existing code first. Produces incompatible changes.
+- **REPEAT_FAILURE** — Trying the same approach after it already failed. Always check prior experiment results before each attempt.
 
 ## Communication Protocol
 - Send `merge_ready` mail to orchestrator when done
@@ -79,6 +85,9 @@ grove task add bug-db-timeout "Bug: DB query times out on large agent lists" --d
 {{sibling_block}}
 {{prior_work_block}}
 {{checkpoint_block}}
+{{#prior_results_block}}
+{{prior_results_block}}
+{{/prior_results_block}}
 
 ## Your Task
 {{task_description}}
